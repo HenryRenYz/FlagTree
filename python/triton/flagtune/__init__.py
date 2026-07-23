@@ -1,28 +1,19 @@
-# flagtune: FlagTune auto-tuning integration for FlagTree
-#
-# Environment variables:
-#   TRITON_USE_FLAGTUNE=1           Enable FlagTune config prediction
-#   TRITON_FLAGTUNE_MODEL_DIR       User-specified local model root
-#   TRITON_FLAGTUNE_TOP_K           Number of top configs per shape (default: 10)
-#   FLAGTUNE_MODEL_CACHE            Model cache directory (default: ~/.flagtree/flagtune_models/)
-#   FLAGTUNE_MODEL_URLS             Custom model URL mapping (JSON file or string)
-#   FLAGTUNE_DISABLE_REMOTE         Disable remote model download
-#
-# Usage:
-#   # New API (recommended)
-#   from triton.flagtune import make_config_proposer
-#   proposer = make_config_proposer({"op_id": "flagtree/gemm"})
-#   config_dicts = proposer(bench_fn, shape, initial_configs, meta)
-#
-#   # FlagTune autotuner (drop-in replacement for @triton.autotune)
-#   from triton.flagtune import flagtune, Flagtuner
-#   @flagtune(configs=[...], key=["M","N","K"], flagtune_op_id="flagtree/gemm")
-#   @triton.jit
-#   def kernel(...): ...
-#
-#   # Deprecated API
-#   from triton.flagtune import make_early_config_prune
-#   prune_fn = make_early_config_prune("mm_general_tma")
+"""Self-contained model integration for FlagTune configuration prediction.
+
+Runtime callers identify a model bundle by
+``(gpu_key, op_id, variant, dtype_key)``. The bundle supplies
+the parameter space, input rules, safe feature expressions, version metadata,
+and XGBoost model without prior operator registration::
+
+    from triton.flagtune import make_config_proposer
+
+    proposer = make_config_proposer(
+        "flaggems/mm",
+        "general_tma",
+        gpu_key="nvidia-h800-80gb-hbm3-sm90",
+        dtype_key="bf16-bf16-bf16",
+    )
+"""
 
 import os
 
@@ -30,48 +21,67 @@ from triton.flagtune._version import __version__
 from triton.flagtune.core.interfaces import BenchmarkFn, ConfigProposer
 from triton.flagtune.flagtuner import Flagtuner, flagtune
 
-_ENABLED: bool = None
+_ENABLED = None
 
 
 def is_enabled() -> bool:
+    """Return whether Triton's FlagTune integration is enabled for this process.
+
+    ``TRITON_USE_FLAGTUNE`` must be exactly ``"1"`` after whitespace stripping.
+    The result is cached on first access. This switch remains independent from
+    FlagGems' legacy ``USE_FLAGTUNE`` expanded-config control.
+    """
     global _ENABLED
     if _ENABLED is None:
         _ENABLED = os.environ.get("TRITON_USE_FLAGTUNE", "").strip() == "1"
     return _ENABLED
 
 
-# Public API — import here to avoid circular deps at module load
-def _lazy_import(name: str):
-    import importlib
-    return importlib.import_module(name)
+def load_model_bundle(
+    op_id: str,
+    variant: str,
+    *,
+    gpu_key: str,
+    dtype_key: str,
+    model_version=None,
+):
+    """Load the self-contained runtime bundle for an exact operator variant.
+
+    Arguments and exceptions are forwarded lazily to
+    :func:`triton.flagtune.predict.load_model_bundle`, avoiding XGBoost imports
+    until a model is actually requested.
+    """
+    from triton.flagtune.predict import load_model_bundle as _load
+
+    return _load(
+        op_id,
+        variant,
+        gpu_key=gpu_key,
+        dtype_key=dtype_key,
+        model_version=model_version,
+    )
 
 
-def register(*args, **kwargs):
-    from triton.flagtune.registry import register as _reg
-    return _reg(*args, **kwargs)
+def make_config_proposer(
+    op_id: str,
+    variant: str,
+    *,
+    gpu_key: str,
+    dtype_key: str,
+    model_version=None,
+) -> ConfigProposer:
+    """Create an XGBoost/GA proposer for an exact operator variant.
 
+    Resolution, YAML compilation, config/model digest validation, and XGBoost
+    loading happen during this call. Their errors propagate to the caller so
+    integration layers can apply their normal fallback policy.
+    """
+    from triton.flagtune.predict import make_config_proposer as _make
 
-def get_operator(*args, **kwargs):
-    from triton.flagtune.registry import get as _get
-    return _get(*args, **kwargs)
-
-
-def list_operators(*args, **kwargs):
-    from triton.flagtune.registry import list_operators as _list
-    return _list(*args, **kwargs)
-
-
-def make_config_proposer(*args, **kwargs):
-    from triton.flagtune.predict import make_config_proposer as _fn
-    return _fn(*args, **kwargs)
-
-
-# Deprecated API (backward compatibility)
-def predict_configs(*args, **kwargs):
-    from triton.flagtune.predict import predict_configs as _fn
-    return _fn(*args, **kwargs)
-
-
-def make_early_config_prune(*args, **kwargs):
-    from triton.flagtune.predict import make_early_config_prune as _fn
-    return _fn(*args, **kwargs)
+    return _make(
+        op_id,
+        variant,
+        gpu_key=gpu_key,
+        dtype_key=dtype_key,
+        model_version=model_version,
+    )
