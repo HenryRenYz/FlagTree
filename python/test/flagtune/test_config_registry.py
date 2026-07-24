@@ -30,8 +30,22 @@ from triton.flagtune.registry import (
     variant_to_model_config,
 )
 
-GPU = dict(gpu_metadata("nvidia", "NVIDIA H800 80GB HBM3", (9, 0)))
-H20_GPU = dict(gpu_metadata("nvidia", "NVIDIA H20-3e", (9, 0)))
+GPU = dict(
+    gpu_metadata(
+        backend="cuda",
+        vendor="nvidia",
+        device_name="NVIDIA H800 80GB HBM3",
+        architecture="sm90",
+    )
+)
+H20_GPU = dict(
+    gpu_metadata(
+        backend="cuda",
+        vendor="nvidia",
+        device_name="NVIDIA H20-3e",
+        architecture="sm90",
+    )
+)
 GPU_KEY = GPU["gpu_key"]
 DTYPES = ["bfloat16", "bfloat16", "float32"]
 DTYPE_KEY = "bf16-bf16-f32"
@@ -180,8 +194,10 @@ def test_builtin_comparison_logic_and_power_operations_are_available():
 
 
 def test_gpu_and_ordered_tensor_dtype_identity_is_canonical():
-    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", (9, 0)) == ("nvidia-h800-80gb-hbm3-sm90")
-    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", (9, 0)) == GPU_KEY
+    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", "sm90") == (
+        "nvidia-h800-80gb-hbm3-sm90"
+    )
+    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", "sm90") == GPU_KEY
     assert normalize_dtype_name("torch.bfloat16") == "bfloat16"
     assert make_dtype_key(["bfloat16", "float16", "float32"]) == "bf16-f16-f32"
     with pytest.raises(ModelIdentityError, match="unsupported tensor dtype"):
@@ -343,7 +359,7 @@ def test_bundle_identity_must_match_requested_pair(tmp_path, monkeypatch):
 
 
 def test_bundle_version_must_match_version_directory(tmp_path, monkeypatch):
-    """Reject a valid format-v4 config copied below a different revision."""
+    """Reject a valid format-v5 config copied below a different revision."""
     yaml = pytest.importorskip("yaml")
     variant = parse_operator_config(_config()).get_variant("general")
     config = variant_to_model_config(variant, _identity(), DTYPES, GPU, "1.0.0")

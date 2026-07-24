@@ -29,6 +29,7 @@ from triton.flagtune.identity import (
     make_dtype_key,
     make_gpu_key,
     normalize_dtype_name,
+    validate_identity_segment,
     validate_op_id,
     validate_variant_name,
 )
@@ -601,16 +602,22 @@ def variant_to_model_config(
     if make_dtype_key(canonical_dtypes) != identity.dtype_key:
         raise FlagTuneConfigError("model identity dtype_key does not match ordered dtypes")
     try:
-        capability = tuple(gpu["compute_capability"])
-        declared_gpu_key = make_gpu_key(str(gpu["vendor"]), str(gpu["device_name"]), capability)
+        backend = validate_identity_segment(gpu["backend"], "GPU backend")
+        declared_gpu_key = make_gpu_key(
+            str(gpu["vendor"]),
+            str(gpu["device_name"]),
+            str(gpu["architecture"]),
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise FlagTuneConfigError(f"invalid GPU metadata: {exc}") from exc
     if declared_gpu_key != identity.gpu_key:
         raise FlagTuneConfigError("model identity gpu_key does not match GPU metadata")
+    if backend not in ("cuda", "hip"):
+        raise FlagTuneConfigError(f"unsupported GPU backend: {backend!r}")
     from triton.flagtune.artifacts import validate_model_version
 
     return {
-        "format_version": 4,
+        "format_version": 5,
         "model_version": validate_model_version(model_version),
         "gpu_key": identity.gpu_key,
         "op_id": variant.op_id,
@@ -663,8 +670,8 @@ def parse_model_config(config: Mapping[str, Any]) -> VariantInfo:
     unknown = set(root) - allowed
     if unknown:
         raise FlagTuneConfigError(f"model config has unknown keys: {sorted(unknown)}")
-    if root.get("format_version") != 4:
-        raise FlagTuneConfigError("model config.format_version must be 4")
+    if root.get("format_version") != 5:
+        raise FlagTuneConfigError("model config.format_version must be 5")
     from triton.flagtune.artifacts import validate_model_version
 
     try:
@@ -704,10 +711,21 @@ def model_identity_from_config(config: Mapping[str, Any]) -> ModelIdentity:
         raise FlagTuneConfigError("model config.dtype_key does not match dtypes")
     gpu = _require_mapping(root.get("gpu"), "model config.gpu")
     try:
-        capability = tuple(gpu["compute_capability"])
-        actual_gpu_key = make_gpu_key(str(gpu["vendor"]), str(gpu["device_name"]), capability)
+        backend = validate_identity_segment(
+            gpu["backend"], "model config.gpu.backend"
+        )
+        architecture = validate_identity_segment(
+            gpu["architecture"], "model config.gpu.architecture"
+        )
+        actual_gpu_key = make_gpu_key(
+            str(gpu["vendor"]), str(gpu["device_name"]), architecture
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise FlagTuneConfigError(f"invalid model config.gpu: {exc}") from exc
+    if backend not in ("cuda", "hip"):
+        raise FlagTuneConfigError(
+            f"model config.gpu.backend is unsupported: {backend!r}"
+        )
     if actual_gpu_key != identity.gpu_key or gpu.get("gpu_key") != identity.gpu_key:
         raise FlagTuneConfigError("model config GPU metadata does not match gpu_key")
     return identity

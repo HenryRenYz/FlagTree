@@ -6,12 +6,11 @@ segments, URL-manifest keys, or fields embedded in ``flagtune_config.yaml``.
 Training/export code records the identity, while registry validation and the
 model manager require an exact match at load time.
 
-GPU keys contain vendor, normalized device name, and a ``smMAJORMINOR`` suffix.
-The suffix is a legacy textual convention, not a claim that every device uses
-NVIDIA SM terminology: ``vendor`` remains part of the key and the capability
-tuple is opaque identity metadata.  A portable backend must provide stable
-device name and capability values; this module does not translate capability
-semantics across vendors.
+GPU keys contain vendor, normalized device name, and a backend-native
+architecture suffix.  NVIDIA uses values such as ``sm90`` while AMD uses values
+such as ``gfx942``.  Device detection and backend validation live in
+``triton.flagtune.device``; this module only canonicalizes already validated
+identity metadata.
 """
 
 from __future__ import annotations
@@ -129,18 +128,19 @@ def _normalize_vendor(value: str) -> str:
     return aliases.get(slug, slug)
 
 
-def make_gpu_key(vendor: str, device_name: str, capability: tuple[int, int]) -> str:
+def make_gpu_key(vendor: str, device_name: str, architecture: str) -> str:
     """Return the stable GPU component used to segregate model artifacts.
 
-    ``capability`` is stored verbatim as major/minor identity metadata and is
-    not interpreted as an instruction-set or feature check.  Callers must not
-    reuse a model across different keys without independently establishing
+    ``architecture`` must be a backend-native stable identifier.  Callers must
+    not reuse a model across different keys without independently establishing
     compatibility.
     """
     vendor_key = _normalize_vendor(vendor)
     device_key = normalize_device_name(device_name)
-    major, minor = (int(capability[0]), int(capability[1]))
-    return validate_identity_segment(f"{vendor_key}-{device_key}-sm{major}{minor}", "gpu_key")
+    architecture_key = validate_identity_segment(architecture, "architecture")
+    return validate_identity_segment(
+        f"{vendor_key}-{device_key}-{architecture_key}", "gpu_key"
+    )
 
 
 @dataclass(frozen=True)
@@ -165,13 +165,22 @@ def artifact_key(gpu_key: str, op_id: str, variant: str, dtype_key: str) -> str:
     return ModelIdentity(gpu_key, op_id, variant, dtype_key).artifact_key
 
 
-def gpu_metadata(vendor: str, device_name: str, capability: tuple[int, int]) -> Mapping[str, Any]:
+def gpu_metadata(
+    *,
+    backend: str,
+    vendor: str,
+    device_name: str,
+    architecture: str,
+) -> Mapping[str, Any]:
     """Return serializable GPU metadata plus the matching canonical ``gpu_key``."""
     return {
+        "backend": validate_identity_segment(backend, "GPU backend"),
         "vendor": str(vendor),
         "device_name": str(device_name),
-        "compute_capability": [int(capability[0]), int(capability[1])],
-        "gpu_key": make_gpu_key(vendor, device_name, capability),
+        "architecture": validate_identity_segment(
+            architecture, "GPU architecture"
+        ),
+        "gpu_key": make_gpu_key(vendor, device_name, architecture),
     }
 
 
@@ -181,15 +190,12 @@ def discover_gpu_metadata() -> Mapping[str, Any]:
     Device ordinal and UUID are intentionally excluded so identical cards on
     one or more hosts resolve to the same model identity.
     """
-    from triton.runtime import driver
+    from triton.flagtune.device import probe_flagtune_device
 
-    interface = driver.active.get_device_interface()
-    device = interface.current_device()
-    device_name = interface.get_device_name(device)
-    capability = interface.get_device_capability(device)
-    target = driver.active.get_current_target()
-    backend = str(getattr(target, "backend", "")).lower()
-    vendor = {"cuda": "nvidia", "hip": "amd"}.get(backend, backend)
-    if not vendor:
-        raise ModelIdentityError("cannot determine GPU vendor from active Triton target")
-    return gpu_metadata(vendor, device_name, capability)
+    descriptor = probe_flagtune_device()
+    return gpu_metadata(
+        backend=descriptor.backend,
+        vendor=descriptor.vendor,
+        device_name=descriptor.device_name,
+        architecture=descriptor.architecture,
+    )

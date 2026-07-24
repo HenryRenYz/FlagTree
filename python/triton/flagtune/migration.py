@@ -3,7 +3,7 @@
 
 This is an offline packaging tool, not a trainer or runtime importer.  It loads
 an existing ranker read-only, compiles the selected operator variant from YAML,
-and delegates to :func:`training.export_ranker_model` to write a format-v4
+and delegates to :func:`training.export_ranker_model` to write a format-v5
 ``model.tar.gz`` under
 ``OUTPUT_ROOT/gpu_key/op_id/variant/dtype_key/model_version/``.  The resulting
 archive has a fresh YAML contract and digest but preserves the ranker's learned
@@ -15,18 +15,13 @@ CLI arguments:
     ``--legacy-model-root`` migrates the three names in ``LEGACY_MODEL_VARIANTS``.
   * ``--flagtune-config`` supplies the operator YAML, ``--output-root`` chooses
     the destination, and ``--model-version`` is strict SemVer 2.0.
-  * ``--gpu-vendor``, ``--gpu-name``, ``--compute-capability``, and ``--dtypes``
+  * ``--backend``, ``--gpu-vendor``, ``--gpu-name``, ``--architecture``, and ``--dtypes``
     build the exact artifact identity. ``--training-summary`` optionally adds
     JSON metadata to the exported summary.
 
-``--compute-capability`` is required solely because the current GPU identity
-records a major/minor capability tuple and validates it against ``gpu_key``.
-The migration code does not select kernels or infer hardware features from it.
-In FlagTune's Python path the same metadata is collected during benchmark
-records and checked when exporting/loading an archive; it is distinct from the
-NVIDIA compiler's compute-capability settings elsewhere in Triton.  The
-current ``sm`` spelling in ``gpu_key`` is NVIDIA-derived, so non-NVIDIA
-backends need a documented stable mapping before their artifacts are portable.
+``--architecture`` is the backend-native target used by the model identity,
+for example ``sm90`` for CUDA or ``gfx942`` for HIP.  The migration code does
+not select kernels or infer hardware features from it.
 """
 
 from __future__ import annotations
@@ -59,7 +54,7 @@ def migrate_ranker_model(
     model_version: str,
     training_summary: Optional[Mapping[str, Any]] = None,
 ) -> Path:
-    """Copy ranker weights into a format-v4 archive without retraining.
+    """Copy ranker weights into a format-v5 archive without retraining.
 
     The new config and its digest are generated from ``operator_config``. The
     ``gpu`` must contain the canonical metadata returned by ``gpu_metadata``;
@@ -136,7 +131,7 @@ def migrate_legacy_model_tree(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line interface for deterministic model re-export."""
-    parser = argparse.ArgumentParser(description="Re-export an XGBoost ranker as a format-v4 FlagTune archive.")
+    parser = argparse.ArgumentParser(description="Re-export an XGBoost ranker as a format-v5 FlagTune archive.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--source-model")
     source.add_argument("--legacy-model-root")
@@ -145,13 +140,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--model-version", required=True, help="Strict SemVer 2.0 model revision.")
     parser.add_argument("--training-summary")
+    parser.add_argument(
+        "--backend",
+        required=True,
+        choices=("cuda", "hip"),
+        help="Triton backend that produced the model data.",
+    )
     parser.add_argument("--gpu-vendor", required=True)
     parser.add_argument("--gpu-name", required=True)
     parser.add_argument(
-        "--compute-capability",
+        "--architecture",
         required=True,
-        help=("Identity metadata in MAJOR.MINOR form, for example 9.0; it is "
-              "not a kernel feature-selection option."),
+        help="Backend-native target, for example sm90 or gfx942.",
     )
     parser.add_argument(
         "--dtypes",
@@ -165,13 +165,6 @@ def main() -> int:
     """Run the migration CLI and print the resulting canonical bundle path."""
     parser = build_parser()
     args = parser.parse_args()
-    try:
-        capability_parts = args.compute_capability.split(".")
-        if len(capability_parts) != 2:
-            raise ValueError
-        capability = (int(capability_parts[0]), int(capability_parts[1]))
-    except ValueError:
-        parser.error("--compute-capability must have MAJOR.MINOR form")
     dtypes = [value.strip() for value in args.dtypes.split(",") if value.strip()]
     if not dtypes:
         parser.error("--dtypes must contain at least one dtype")
@@ -179,7 +172,12 @@ def main() -> int:
         model_version = validate_model_version(args.model_version)
     except ValueError as exc:
         parser.error(str(exc))
-    gpu = gpu_metadata(args.gpu_vendor, args.gpu_name, capability)
+    gpu = gpu_metadata(
+        backend=args.backend,
+        vendor=args.gpu_vendor,
+        device_name=args.gpu_name,
+        architecture=args.architecture,
+    )
     summary: Optional[Mapping[str, Any]] = None
     if args.training_summary:
         summary_path = Path(args.training_summary).expanduser().resolve()

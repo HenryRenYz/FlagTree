@@ -25,7 +25,14 @@ from triton.flagtune.training import (
 )
 import triton.flagtune.training as training
 
-GPU = dict(gpu_metadata("nvidia", "NVIDIA H800 80GB HBM3", (9, 0)))
+GPU = dict(
+    gpu_metadata(
+        backend="cuda",
+        vendor="nvidia",
+        device_name="NVIDIA H800 80GB HBM3",
+        architecture="sm90",
+    )
+)
 IDENTITY = ModelIdentity(GPU["gpu_key"], "tests/train", "kernel", "bf16-bf16-f32")
 DTYPES = ["bfloat16", "bfloat16", "float32"]
 
@@ -64,12 +71,18 @@ def _write_data(path, shape_order=("a", "b")):
     inputs = {"a": {"M": 64, "N": 32}, "b": {"M": 128, "N": 64}}
     latencies = {"a": [4.0, 3.0, 2.0, 1.0], "b": [1.0, 2.0, 3.0, 4.0]}
     with path.open("w", encoding="utf-8") as handle:
-        for shape_key in shape_order:
-            for config, latency in zip(configs, latencies[shape_key]):
+        for shape_name in shape_order:
+            for config, latency in zip(configs, latencies[shape_name]):
                 handle.write(
                     json.dumps({
-                        "shape_key": shape_key,
-                        "inputs": inputs[shape_key],
+                        "schema_version": 2,
+                        "ranking_group": {
+                            "operator_id": "tests/train",
+                            "variant": "kernel",
+                            "dimensions": inputs[shape_name],
+                            "model_dtype_key": "bf16-bf16-f32",
+                        },
+                        "inputs": inputs[shape_name],
                         "config": config,
                         "latency_ms": latency,
                     }) + "\n")
@@ -116,12 +129,33 @@ def test_prepare_ranking_data_sampling_is_reproducible(tmp_path):
 
 
 def test_prepare_ranking_data_rejects_noncontiguous_shape_groups(tmp_path):
-    """Reject a shape key that reappears after a different query group."""
+    """Reject a ranking group that reappears after a different query group."""
     variant = parse_operator_config(_config()).get_variant("kernel")
     data_path = tmp_path / "benchmark.jsonl"
     _write_data(data_path, shape_order=("a", "b", "a"))
 
     with pytest.raises(TrainingDataError, match="not contiguous"):
+        prepare_ranking_data(
+            variant,
+            data_path,
+            XGBoostTrainingOptions(min_train_rows=2, show_progress=False),
+        )
+
+
+def test_prepare_ranking_data_rejects_group_dimensions_mismatching_inputs(tmp_path):
+    """Require the public ranking-group identity to match feature inputs."""
+    variant = parse_operator_config(_config()).get_variant("kernel")
+    data_path = tmp_path / "benchmark.jsonl"
+    _write_data(data_path)
+    rows = [json.loads(line) for line in data_path.read_text().splitlines()]
+    for row in rows[:4]:
+        row["ranking_group"]["dimensions"]["M"] = 999
+    data_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TrainingDataError, match="dimensions do not match inputs"):
         prepare_ranking_data(
             variant,
             data_path,
@@ -135,12 +169,22 @@ def test_prepare_ranking_data_rejects_mixed_gpu_and_dtype_identity(tmp_path):
     _write_data(data_path)
     rows = [json.loads(line) for line in data_path.read_text().splitlines()]
     for index, row in enumerate(rows):
-        row.update({
-            "gpu_key": "nvidia-h800-sm90" if index < 4 else "nvidia-h20-sm90",
-            "input_dtypes": ["bfloat16", "bfloat16"],
-            "output_dtypes": ["bfloat16"],
-            "dtype_key": "bf16-bf16-bf16",
-        })
+        row.update(
+            {
+                "model_identity": {
+                    "gpu_key": (
+                        "nvidia-h800-sm90"
+                        if index < 4
+                        else "nvidia-h20-sm90"
+                    ),
+                    "dtype_key": "bf16-bf16-f32",
+                },
+                "dtypes": {
+                    "inputs": ["bfloat16", "bfloat16"],
+                    "outputs": ["float32"],
+                },
+            }
+        )
     data_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     with pytest.raises(TrainingDataError, match="mixes GPU identities"):
@@ -187,7 +231,7 @@ def test_train_and_export_model_is_loadable_by_xgboost_ranker(tmp_path):
     yaml = pytest.importorskip("yaml")
     saved_config = yaml.safe_load(members["flagtune_config.yaml"])
     assert saved_config == exported.model_config
-    assert saved_config["format_version"] == 4
+    assert saved_config["format_version"] == 5
     assert saved_config["model_version"] == "1.0.0"
     assert saved_config["gpu_key"] == GPU["gpu_key"]
     assert saved_config["dtype_key"] == "bf16-bf16-f32"
