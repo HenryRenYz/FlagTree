@@ -64,18 +64,14 @@ def _nvidia_architecture(value: Any) -> str:
     else:
         suffix = text.replace(".", "").replace("_", "")
     if not suffix.isdigit():
-        raise DeviceProbeError(
-            f"CUDA target has invalid architecture {value!r}; expected smNN or NN"
-        )
+        raise DeviceProbeError(f"CUDA target has invalid architecture {value!r}; expected smNN or NN")
     return f"sm{suffix}"
 
 
 def _amd_architecture(value: Any) -> str:
     text = str(value).strip().lower()
     if not text.startswith("gfx") or len(text) <= 3:
-        raise DeviceProbeError(
-            f"HIP target has invalid architecture {value!r}; expected gfxNNN"
-        )
+        raise DeviceProbeError(f"HIP target has invalid architecture {value!r}; expected gfxNNN")
     return text
 
 
@@ -119,45 +115,31 @@ def probe_flagtune_device(device_index: int | None = None) -> DeviceDescriptor:
         active = _active_driver()
         target = active.get_current_target()
     except Exception as exc:
-        raise DeviceProbeError(
-            f"cannot query the active Triton target: {exc}"
-        ) from exc
+        raise DeviceProbeError(f"cannot query the active Triton target: {exc}") from exc
 
     backend = str(getattr(target, "backend", "")).strip().lower()
     descriptor = _BACKENDS.get(backend)
     if descriptor is None:
         supported = ", ".join(registered_device_backends())
         shown = backend or "<unknown>"
-        raise UnsupportedFlagTuneDeviceError(
-            f"FlagTune does not support Triton backend {shown!r}; "
-            f"registered backends: {supported}"
-        )
+        raise UnsupportedFlagTuneDeviceError(f"FlagTune does not support Triton backend {shown!r}; "
+                                             f"registered backends: {supported}")
 
     raw_architecture = getattr(target, "arch", None)
     if raw_architecture is None:
-        raise DeviceProbeError(
-            f"supported backend {backend!r} did not report a target architecture"
-        )
+        raise DeviceProbeError(f"supported backend {backend!r} did not report a target architecture")
     architecture = descriptor.normalize_architecture(raw_architecture)
 
     try:
         interface = active.get_device_interface()
-        index = (
-            int(interface.current_device())
-            if device_index is None
-            else int(device_index)
-        )
+        index = (int(interface.current_device()) if device_index is None else int(device_index))
         device_name = str(interface.get_device_name(index)).strip()
     except Exception as exc:
-        raise DeviceProbeError(
-            f"cannot query {backend!r} device metadata for index "
-            f"{device_index if device_index is not None else '<current>'}: {exc}"
-        ) from exc
+        raise DeviceProbeError(f"cannot query {backend!r} device metadata for index "
+                               f"{device_index if device_index is not None else '<current>'}: {exc}") from exc
     if not device_name:
-        raise DeviceProbeError(
-            f"supported backend {backend!r} returned an empty device name "
-            f"for index {index}"
-        )
+        raise DeviceProbeError(f"supported backend {backend!r} returned an empty device name "
+                               f"for index {index}")
 
     return DeviceDescriptor(
         backend=backend,

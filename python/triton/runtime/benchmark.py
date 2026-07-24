@@ -85,11 +85,7 @@ def _validate_request(
         raise ValueError("benchmark mode must be 'event' or 'replay'") from exc
     if not isinstance(warmup_ms, int) or isinstance(warmup_ms, bool) or warmup_ms < 0:
         raise ValueError("benchmark warmup_ms must be a non-negative integer")
-    if (
-        not isinstance(measurement_ms, int)
-        or isinstance(measurement_ms, bool)
-        or measurement_ms <= 0
-    ):
+    if (not isinstance(measurement_ms, int) or isinstance(measurement_ms, bool) or measurement_ms <= 0):
         raise ValueError("benchmark measurement_ms must be a positive integer")
     if not isinstance(n_retries, int) or isinstance(n_retries, bool) or n_retries <= 0:
         raise ValueError("benchmark n_retries must be a positive integer")
@@ -140,12 +136,8 @@ def resolve_benchmarker(
                 benchmark=replay_benchmark,
             )
         if not allow_fallback:
-            raise RuntimeError(
-                "active Triton backend does not provide a replay benchmarker"
-            )
-        fallback_reason = (
-            "active Triton backend does not provide a replay benchmarker"
-        )
+            raise RuntimeError("active Triton backend does not provide a replay benchmarker")
+        fallback_reason = ("active Triton backend does not provide a replay benchmarker")
         warnings.warn(
             f"{fallback_reason}; falling back to event timing",
             RuntimeWarning,

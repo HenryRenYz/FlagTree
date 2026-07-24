@@ -138,9 +138,7 @@ def make_gpu_key(vendor: str, device_name: str, architecture: str) -> str:
     vendor_key = _normalize_vendor(vendor)
     device_key = normalize_device_name(device_name)
     architecture_key = validate_identity_segment(architecture, "architecture")
-    return validate_identity_segment(
-        f"{vendor_key}-{device_key}-{architecture_key}", "gpu_key"
-    )
+    return validate_identity_segment(f"{vendor_key}-{device_key}-{architecture_key}", "gpu_key")
 
 
 @dataclass(frozen=True)
@@ -177,9 +175,7 @@ def gpu_metadata(
         "backend": validate_identity_segment(backend, "GPU backend"),
         "vendor": str(vendor),
         "device_name": str(device_name),
-        "architecture": validate_identity_segment(
-            architecture, "GPU architecture"
-        ),
+        "architecture": validate_identity_segment(architecture, "GPU architecture"),
         "gpu_key": make_gpu_key(vendor, device_name, architecture),
     }
 

@@ -122,9 +122,7 @@ class Flagtuner(Autotuner):
     ):
         """Initialize Triton's baseline tuner and lazy FlagTune state."""
         if benchmark_mode is not None and use_cuda_graph is not None:
-            raise ValueError(
-                "benchmark_mode and deprecated use_cuda_graph cannot be supplied together"
-            )
+            raise ValueError("benchmark_mode and deprecated use_cuda_graph cannot be supplied together")
         if use_cuda_graph is not None:
             warnings.warn(
                 "use_cuda_graph is deprecated; use benchmark_mode='replay' or "
@@ -132,13 +130,9 @@ class Flagtuner(Autotuner):
                 DeprecationWarning,
                 stacklevel=2,
             )
-            selected_mode = (
-                BenchmarkMode.REPLAY if use_cuda_graph else BenchmarkMode.EVENT
-            )
+            selected_mode = (BenchmarkMode.REPLAY if use_cuda_graph else BenchmarkMode.EVENT)
         else:
-            selected_mode = BenchmarkMode(
-                benchmark_mode if benchmark_mode is not None else "replay"
-            )
+            selected_mode = BenchmarkMode(benchmark_mode if benchmark_mode is not None else "replay")
         resolved_benchmark = resolve_benchmarker(
             selected_mode,
             warmup_ms=warmup,

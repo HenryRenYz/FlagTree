@@ -25,14 +25,12 @@ from triton.flagtune.training.ranker import (
 )
 import triton.flagtune.training.ranker as training
 
-GPU = dict(
-    gpu_metadata(
-        backend="cuda",
-        vendor="nvidia",
-        device_name="NVIDIA H800 80GB HBM3",
-        architecture="sm90",
-    )
-)
+GPU = dict(gpu_metadata(
+    backend="cuda",
+    vendor="nvidia",
+    device_name="NVIDIA H800 80GB HBM3",
+    architecture="sm90",
+))
 IDENTITY = ModelIdentity(GPU["gpu_key"], "tests/train", "kernel", "bf16-bf16-f32")
 DTYPES = ["bfloat16", "bfloat16", "float32"]
 
@@ -169,22 +167,16 @@ def test_prepare_ranking_data_rejects_mixed_gpu_and_dtype_identity(tmp_path):
     _write_data(data_path)
     rows = [json.loads(line) for line in data_path.read_text().splitlines()]
     for index, row in enumerate(rows):
-        row.update(
-            {
-                "model_identity": {
-                    "gpu_key": (
-                        "nvidia-h800-sm90"
-                        if index < 4
-                        else "nvidia-h20-sm90"
-                    ),
-                    "dtype_key": "bf16-bf16-f32",
-                },
-                "dtypes": {
-                    "inputs": ["bfloat16", "bfloat16"],
-                    "outputs": ["float32"],
-                },
-            }
-        )
+        row.update({
+            "model_identity": {
+                "gpu_key": ("nvidia-h800-sm90" if index < 4 else "nvidia-h20-sm90"),
+                "dtype_key": "bf16-bf16-f32",
+            },
+            "dtypes": {
+                "inputs": ["bfloat16", "bfloat16"],
+                "outputs": ["float32"],
+            },
+        })
     data_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
     with pytest.raises(TrainingDataError, match="mixes GPU identities"):

@@ -49,9 +49,7 @@ def test_cudagraph_helper_keeps_ten_retries_as_compatible_default():
 
 def test_replay_splits_total_measurement_budget(monkeypatch):
     active = _FakeDriver()
-    monkeypatch.setattr(
-        benchmark_module, "driver", SimpleNamespace(active=active)
-    )
+    monkeypatch.setattr(benchmark_module, "driver", SimpleNamespace(active=active))
     launches = []
 
     resolved = benchmark_module.resolve_benchmarker(
@@ -84,9 +82,7 @@ def test_replay_splits_total_measurement_budget(monkeypatch):
 
 def test_missing_replay_capability_warns_and_resolves_event(monkeypatch):
     active = _FakeDriver(replay=False)
-    monkeypatch.setattr(
-        benchmark_module, "driver", SimpleNamespace(active=active)
-    )
+    monkeypatch.setattr(benchmark_module, "driver", SimpleNamespace(active=active))
 
     with pytest.warns(RuntimeWarning, match="falling back to event"):
         resolved = benchmark_module.resolve_benchmarker(
@@ -110,9 +106,7 @@ def test_missing_replay_capability_warns_and_resolves_event(monkeypatch):
 
 @pytest.mark.parametrize("n_retries", [0, -1, True, 1.5])
 def test_replay_rejects_invalid_retry_count(monkeypatch, n_retries):
-    monkeypatch.setattr(
-        benchmark_module, "driver", SimpleNamespace(active=_FakeDriver())
-    )
+    monkeypatch.setattr(benchmark_module, "driver", SimpleNamespace(active=_FakeDriver()))
     with pytest.raises(ValueError, match="n_retries"):
         benchmark_module.resolve_benchmarker(
             "replay",

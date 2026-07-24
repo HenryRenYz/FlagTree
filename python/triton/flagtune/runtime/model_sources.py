@@ -64,7 +64,7 @@ _BUILTIN_TABLE: Dict[str, Dict[str, Any]] = {
 # Remote manifest
 # ---------------------------------------------------------------------------
 
-_MANIFEST_URL = "https://models.flagtree.ai/flagtune/manifest.json" # TODO just a simple fallback, make it real
+_MANIFEST_URL = "https://models.flagtree.ai/flagtune/manifest.json"  # TODO just a simple fallback, make it real
 _MANIFEST_MAX_AGE_S = 24 * 3600  # 24 hours
 
 

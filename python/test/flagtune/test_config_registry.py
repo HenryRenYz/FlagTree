@@ -30,22 +30,18 @@ from triton.flagtune.contract.operator_schema import (
     variant_to_model_config,
 )
 
-GPU = dict(
-    gpu_metadata(
-        backend="cuda",
-        vendor="nvidia",
-        device_name="NVIDIA H800 80GB HBM3",
-        architecture="sm90",
-    )
-)
-H20_GPU = dict(
-    gpu_metadata(
-        backend="cuda",
-        vendor="nvidia",
-        device_name="NVIDIA H20-3e",
-        architecture="sm90",
-    )
-)
+GPU = dict(gpu_metadata(
+    backend="cuda",
+    vendor="nvidia",
+    device_name="NVIDIA H800 80GB HBM3",
+    architecture="sm90",
+))
+H20_GPU = dict(gpu_metadata(
+    backend="cuda",
+    vendor="nvidia",
+    device_name="NVIDIA H20-3e",
+    architecture="sm90",
+))
 GPU_KEY = GPU["gpu_key"]
 DTYPES = ["bfloat16", "bfloat16", "float32"]
 DTYPE_KEY = "bf16-bf16-f32"
@@ -194,9 +190,7 @@ def test_builtin_comparison_logic_and_power_operations_are_available():
 
 
 def test_gpu_and_ordered_tensor_dtype_identity_is_canonical():
-    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", "sm90") == (
-        "nvidia-h800-80gb-hbm3-sm90"
-    )
+    assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", "sm90") == ("nvidia-h800-80gb-hbm3-sm90")
     assert make_gpu_key("NVIDIA", "NVIDIA H800 80GB HBM3", "sm90") == GPU_KEY
     assert normalize_dtype_name("torch.bfloat16") == "bfloat16"
     assert make_dtype_key(["bfloat16", "float16", "float32"]) == "bf16-f16-f32"

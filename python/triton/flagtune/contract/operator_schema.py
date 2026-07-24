@@ -711,21 +711,13 @@ def model_identity_from_config(config: Mapping[str, Any]) -> ModelIdentity:
         raise FlagTuneConfigError("model config.dtype_key does not match dtypes")
     gpu = _require_mapping(root.get("gpu"), "model config.gpu")
     try:
-        backend = validate_identity_segment(
-            gpu["backend"], "model config.gpu.backend"
-        )
-        architecture = validate_identity_segment(
-            gpu["architecture"], "model config.gpu.architecture"
-        )
-        actual_gpu_key = make_gpu_key(
-            str(gpu["vendor"]), str(gpu["device_name"]), architecture
-        )
+        backend = validate_identity_segment(gpu["backend"], "model config.gpu.backend")
+        architecture = validate_identity_segment(gpu["architecture"], "model config.gpu.architecture")
+        actual_gpu_key = make_gpu_key(str(gpu["vendor"]), str(gpu["device_name"]), architecture)
     except (KeyError, TypeError, ValueError) as exc:
         raise FlagTuneConfigError(f"invalid model config.gpu: {exc}") from exc
     if backend not in ("cuda", "hip"):
-        raise FlagTuneConfigError(
-            f"model config.gpu.backend is unsupported: {backend!r}"
-        )
+        raise FlagTuneConfigError(f"model config.gpu.backend is unsupported: {backend!r}")
     if actual_gpu_key != identity.gpu_key or gpu.get("gpu_key") != identity.gpu_key:
         raise FlagTuneConfigError("model config GPU metadata does not match gpu_key")
     return identity

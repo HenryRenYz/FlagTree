@@ -12,6 +12,7 @@ from triton.flagtune.runtime.device import (
 
 
 class _FakeInterface:
+
     def __init__(self, names):
         self._names = names
 
@@ -24,7 +25,8 @@ class _FakeInterface:
 
 
 class _FakeActive:
-    def __init__(self, backend, arch, names=("Test GPU",)):
+
+    def __init__(self, backend, arch, names=("Test GPU", )):
         self._target = SimpleNamespace(backend=backend, arch=arch)
         self._interface = _FakeInterface(names)
 
@@ -59,7 +61,7 @@ def test_probe_hip_preserves_gfx_architecture(monkeypatch):
     monkeypatch.setattr(
         device,
         "_active_driver",
-        lambda: _FakeActive("hip", "gfx942", ("AMD Instinct MI300X",)),
+        lambda: _FakeActive("hip", "gfx942", ("AMD Instinct MI300X", )),
     )
     descriptor = probe_flagtune_device()
 
@@ -72,12 +74,10 @@ def test_probe_hip_preserves_gfx_architecture(monkeypatch):
 def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
     from triton.flagtune import device
 
-    monkeypatch.setattr(
-        device, "_active_driver", lambda: _FakeActive("xpu", "pvc")
-    )
+    monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("xpu", "pvc"))
     with pytest.raises(
-        UnsupportedFlagTuneDeviceError,
-        match="does not support Triton backend 'xpu'.*cuda, hip",
+            UnsupportedFlagTuneDeviceError,
+            match="does not support Triton backend 'xpu'.*cuda, hip",
     ):
         probe_flagtune_device()
 
@@ -85,8 +85,6 @@ def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
 def test_probe_rejects_invalid_native_architecture(monkeypatch):
     from triton.flagtune import device
 
-    monkeypatch.setattr(
-        device, "_active_driver", lambda: _FakeActive("cuda", "hopper")
-    )
+    monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("cuda", "hopper"))
     with pytest.raises(DeviceProbeError, match="invalid architecture"):
         probe_flagtune_device()

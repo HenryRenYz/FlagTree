@@ -154,29 +154,19 @@ def _ranking_group_key(record: Mapping[str, Any], line_number: int) -> str:
     """Return the canonical key for one structured Schema v2 ranking group."""
     group = record.get("ranking_group")
     if not isinstance(group, Mapping):
-        raise TrainingDataError(
-            f"benchmark data line {line_number} has no ranking_group mapping"
-        )
+        raise TrainingDataError(f"benchmark data line {line_number} has no ranking_group mapping")
     required = ("operator_id", "variant", "dimensions", "model_dtype_key")
     missing = [name for name in required if name not in group]
     if missing:
-        raise TrainingDataError(
-            f"benchmark data line {line_number} ranking_group is missing "
-            f"{', '.join(missing)}"
-        )
+        raise TrainingDataError(f"benchmark data line {line_number} ranking_group is missing "
+                                f"{', '.join(missing)}")
     if not isinstance(group["dimensions"], Mapping):
-        raise TrainingDataError(
-            f"benchmark data line {line_number} ranking_group dimensions "
-            "must be a mapping"
-        )
+        raise TrainingDataError(f"benchmark data line {line_number} ranking_group dimensions "
+                                "must be a mapping")
     try:
-        return json.dumps(
-            dict(group), sort_keys=True, separators=(",", ":"), allow_nan=False
-        )
+        return json.dumps(dict(group), sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
-        raise TrainingDataError(
-            f"benchmark data line {line_number} has invalid ranking_group: {exc}"
-        ) from exc
+        raise TrainingDataError(f"benchmark data line {line_number} has invalid ranking_group: {exc}") from exc
 
 
 def _finite_latency(record: Mapping[str, Any]) -> Optional[float]:
@@ -227,9 +217,7 @@ def _group_records(path: Path, ) -> Iterator[Tuple[str, List[Tuple[int, Dict[str
             completed.add(current_key)
             yield current_key, current
             if key in completed:
-                raise TrainingDataError(
-                    f"ranking_group {key!r} is not contiguous in {path}"
-                )
+                raise TrainingDataError(f"ranking_group {key!r} is not contiguous in {path}")
             current_key = key
             current = []
         current.append((line_number, record))
@@ -280,12 +268,8 @@ def _group_plan(
             model_identity = record.get("model_identity")
             dtypes = record.get("dtypes")
             identity_fields = (
-                model_identity.get("gpu_key")
-                if isinstance(model_identity, Mapping)
-                else None,
-                model_identity.get("dtype_key")
-                if isinstance(model_identity, Mapping)
-                else None,
+                model_identity.get("gpu_key") if isinstance(model_identity, Mapping) else None,
+                model_identity.get("dtype_key") if isinstance(model_identity, Mapping) else None,
                 dtypes.get("inputs") if isinstance(dtypes, Mapping) else None,
                 dtypes.get("outputs") if isinstance(dtypes, Mapping) else None,
             )
@@ -298,19 +282,12 @@ def _group_plan(
                 from triton.flagtune.contract.identity import make_dtype_key
 
                 if make_dtype_key([*input_dtypes, *output_dtypes]) != dtype_key:
-                    raise TrainingDataError(
-                        f"benchmark data line {line_number} has inconsistent "
-                        "model_identity.dtype_key"
-                    )
+                    raise TrainingDataError(f"benchmark data line {line_number} has inconsistent "
+                                            "model_identity.dtype_key")
                 ranking_group = record.get("ranking_group")
-                if (
-                    not isinstance(ranking_group, Mapping)
-                    or ranking_group.get("model_dtype_key") != dtype_key
-                ):
-                    raise TrainingDataError(
-                        f"benchmark data line {line_number} has inconsistent "
-                        "ranking_group.model_dtype_key"
-                    )
+                if (not isinstance(ranking_group, Mapping) or ranking_group.get("model_dtype_key") != dtype_key):
+                    raise TrainingDataError(f"benchmark data line {line_number} has inconsistent "
+                                            "ranking_group.model_dtype_key")
                 gpu_keys.add(gpu_key)
                 dtype_keys.add(dtype_key)
         finite_count = sum(_finite_latency(record) is not None for _, record in records)
@@ -395,31 +372,20 @@ def prepare_ranking_data(
             raise TrainingDataError(f"benchmark data line {selected[0][0]} has no inputs mapping")
         ranking_group = selected[0][1].get("ranking_group")
         if not isinstance(ranking_group, Mapping):
-            raise TrainingDataError(
-                f"benchmark data line {selected[0][0]} has no ranking_group mapping"
-            )
-        if (
-            ranking_group.get("operator_id") != variant.op_id
-            or ranking_group.get("variant") != variant.name
-        ):
-            raise TrainingDataError(
-                f"benchmark data line {selected[0][0]} ranking_group does not "
-                f"match {variant.op_id}/{variant.name}"
-            )
+            raise TrainingDataError(f"benchmark data line {selected[0][0]} has no ranking_group mapping")
+        if (ranking_group.get("operator_id") != variant.op_id or ranking_group.get("variant") != variant.name):
+            raise TrainingDataError(f"benchmark data line {selected[0][0]} ranking_group does not "
+                                    f"match {variant.op_id}/{variant.name}")
         if ranking_group.get("dimensions") != first_inputs:
-            raise TrainingDataError(
-                f"benchmark data line {selected[0][0]} ranking_group dimensions "
-                "do not match inputs"
-            )
+            raise TrainingDataError(f"benchmark data line {selected[0][0]} ranking_group dimensions "
+                                    "do not match inputs")
         configs: List[Mapping[str, Any]] = []
         latencies = np.empty(len(selected), dtype=np.float64)
         for index, (line_number, record, latency) in enumerate(selected):
             inputs = record.get("inputs")
             config = record.get("config")
             if inputs != first_inputs:
-                raise TrainingDataError(
-                    f"ranking group contains inconsistent inputs at line {line_number}"
-                )
+                raise TrainingDataError(f"ranking group contains inconsistent inputs at line {line_number}")
             if not isinstance(config, Mapping):
                 raise TrainingDataError(f"benchmark data line {line_number} has no config mapping")
             if not variant.param_space.validate(dict(config)):
@@ -433,9 +399,7 @@ def prepare_ranking_data(
             raise TrainingDataError(f"feature matrix has shape {matrix.shape}, expected "
                                     f"({len(selected)}, {feature_count})")
         if not np.isfinite(matrix).all():
-            raise TrainingDataError(
-                f"non-finite feature value for ranking group {_key!r}"
-            )
+            raise TrainingDataError(f"non-finite feature value for ranking group {_key!r}")
         end = offset + len(selected)
         features[offset:end] = matrix
         order = np.argsort(latencies, kind="stable")
