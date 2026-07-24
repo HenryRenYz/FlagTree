@@ -7,7 +7,7 @@ import tarfile
 
 import pytest
 
-from triton.flagtune.artifacts import (
+from triton.flagtune.contract.archive import (
     ModelArchiveError,
     parse_model_version,
     read_model_archive,
@@ -15,7 +15,7 @@ from triton.flagtune.artifacts import (
     validate_model_version,
     write_model_archive,
 )
-from triton.flagtune.model_manager import FlagTuneModelManager, IncompatibleModelError
+from triton.flagtune.runtime.model_loader import FlagTuneModelManager, IncompatibleModelError
 
 IDENTITY_PATH = ("nvidia-h800-sm90", "vendor", "mm", "general", "bf16-bf16-f32")
 

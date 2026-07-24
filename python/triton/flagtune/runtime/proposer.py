@@ -30,8 +30,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from triton.flagtune.core.interfaces import BenchmarkFn, ConfigProposer
-from triton.flagtune.identity import ModelIdentity
-from triton.flagtune.registry import VariantInfo
+from triton.flagtune.contract.identity import ModelIdentity
+from triton.flagtune.contract.operator_schema import VariantInfo
 
 _MODEL_MANAGER: Optional[Any] = None
 _TOP_K_CACHE: Optional[int] = None
@@ -41,7 +41,7 @@ def _get_model_manager() -> Any:
     """Return the lazy process-wide model manager shared by public entry points."""
     global _MODEL_MANAGER
     if _MODEL_MANAGER is None:
-        from triton.flagtune.model_manager import FlagTuneModelManager
+        from triton.flagtune.runtime.model_loader import FlagTuneModelManager
 
         _MODEL_MANAGER = FlagTuneModelManager()
     return _MODEL_MANAGER

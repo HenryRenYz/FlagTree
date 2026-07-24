@@ -57,7 +57,7 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.median(times)
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean", n_retries=10):
     """
     Benchmark the runtime of the provided function.
 
@@ -69,9 +69,13 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param n_retries: Number of independently timed graph replays used to summarize latency.
+    :type n_retries: int
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
+    if not isinstance(n_retries, int) or isinstance(n_retries, bool) or n_retries <= 0:
+        raise ValueError("n_retries must be a positive integer")
 
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
@@ -112,7 +116,6 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         torch.cuda.synchronize()
         # measure time and return
         ret = []
-        n_retries = 10
         for _ in range(n_retries):
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)

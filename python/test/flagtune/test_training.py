@@ -13,17 +13,17 @@ import json
 import numpy as np
 import pytest
 
-from triton.flagtune.artifacts import read_model_archive
-from triton.flagtune.registry import parse_operator_config
-from triton.flagtune.identity import ModelIdentity, gpu_metadata
-from triton.flagtune.training import (
+from triton.flagtune.contract.archive import read_model_archive
+from triton.flagtune.contract.operator_schema import parse_operator_config
+from triton.flagtune.contract.identity import ModelIdentity, gpu_metadata
+from triton.flagtune.training.ranker import (
     TrainingDataError,
     XGBoostTrainingOptions,
     export_ranker_model,
     prepare_ranking_data,
     train_xgboost_ranker,
 )
-import triton.flagtune.training as training
+import triton.flagtune.training.ranker as training
 
 GPU = dict(
     gpu_metadata(

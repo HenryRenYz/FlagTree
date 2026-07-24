@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from triton.flagtune.device import (
+from triton.flagtune.runtime.device import (
     DeviceProbeError,
     UnsupportedFlagTuneDeviceError,
     probe_flagtune_device,

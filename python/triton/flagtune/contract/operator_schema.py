@@ -17,14 +17,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 
 from triton.flagtune.core.interfaces import ParameterField, ParameterSpace
-from triton.flagtune.expressions import (
+from triton.flagtune.contract.expressions import (
     SafeExpressionError,
     evaluate_expression,
     require_mapping as _require_mapping,
     validate_expression as _validate_expression,
     validate_symbol_name,
 )
-from triton.flagtune.identity import (
+from triton.flagtune.contract.identity import (
     ModelIdentity,
     make_dtype_key,
     make_gpu_key,
@@ -614,7 +614,7 @@ def variant_to_model_config(
         raise FlagTuneConfigError("model identity gpu_key does not match GPU metadata")
     if backend not in ("cuda", "hip"):
         raise FlagTuneConfigError(f"unsupported GPU backend: {backend!r}")
-    from triton.flagtune.artifacts import validate_model_version
+    from triton.flagtune.contract.archive import validate_model_version
 
     return {
         "format_version": 5,
@@ -672,7 +672,7 @@ def parse_model_config(config: Mapping[str, Any]) -> VariantInfo:
         raise FlagTuneConfigError(f"model config has unknown keys: {sorted(unknown)}")
     if root.get("format_version") != 5:
         raise FlagTuneConfigError("model config.format_version must be 5")
-    from triton.flagtune.artifacts import validate_model_version
+    from triton.flagtune.contract.archive import validate_model_version
 
     try:
         validate_model_version(root.get("model_version"))

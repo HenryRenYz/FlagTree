@@ -34,7 +34,7 @@ from urllib.parse import urlparse
 import numpy as np
 
 from triton.flagtune._version import __version__ as _FLAGTUNE_VERSION
-from triton.flagtune.artifacts import (
+from triton.flagtune.contract.archive import (
     MODEL_ARCHIVE_NAME,
     ModelArchiveError,
     parse_model_version,
@@ -42,8 +42,8 @@ from triton.flagtune.artifacts import (
     read_model_archive_bytes,
     validate_model_version,
 )
-from triton.flagtune.identity import ModelIdentity
-from triton.flagtune.registry import (
+from triton.flagtune.contract.identity import ModelIdentity
+from triton.flagtune.contract.operator_schema import (
     VariantInfo,
     load_model_config_bytes,
     model_config_sha256,
@@ -288,7 +288,7 @@ class FlagTuneModelManager:
 
     def _download(self, identity: ModelIdentity, model_version: Optional[str]) -> Optional[Path]:
         """Resolve, validate, and atomically cache one remote archive, if configured."""
-        from triton.flagtune.model_urls import resolve_artifact
+        from triton.flagtune.runtime.model_sources import resolve_artifact
 
         artifact = resolve_artifact(
             identity.op_id,

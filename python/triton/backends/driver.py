@@ -1,11 +1,25 @@
 from abc import ABCMeta, abstractmethod
-from typing import Callable, List, Protocol, Sequence
+from dataclasses import dataclass
+from typing import Callable, List, Optional, Protocol, Sequence
 
 
 class Benchmarker(Protocol):
 
     def __call__(self, kernel_call: Callable, *, quantiles: List[float], **kwargs) -> Sequence[float]:
         pass
+
+
+@dataclass(frozen=True)
+class BenchmarkerCapability:
+    """Describe one backend-owned benchmark implementation.
+
+    The runtime benchmark resolver consumes this descriptor without knowing
+    which device API, graph type, stream, or command queue implements it.
+    """
+
+    identifier: str
+    benchmarker: Benchmarker
+    cache_policy: str
 
 
 class DriverBase(metaclass=ABCMeta):
@@ -42,6 +56,16 @@ class DriverBase(metaclass=ABCMeta):
         Return the benchmarking function that this backend should use by default.
         """
         raise NotImplementedError
+
+    def get_replay_benchmarker(self) -> Optional[BenchmarkerCapability]:
+        """Return an optional capture/replay benchmark implementation.
+
+        Backends with graph, command-buffer, or equivalent replay support
+        override this method.  The default keeps existing third-party drivers
+        compatible and lets the architecture-neutral resolver fall back to the
+        normal event benchmark.
+        """
+        return None
 
     def __init__(self) -> None:
         pass

@@ -23,9 +23,11 @@ via the ConfigProposer API.  Otherwise behaves exactly like Autotuner.
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Any, Callable, Dict, List, Optional
 
 from triton.runtime.autotuner import Autotuner
+from triton.runtime.benchmark import BenchmarkMode, resolve_benchmarker
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +81,12 @@ class Flagtuner(Autotuner):
         prune_configs_by: Triton early-pruning/performance-model settings.
         warmup: Benchmark warmup iterations.
         rep: Benchmark measurement iterations.
-        use_cuda_graph: Whether Triton benchmarks with CUDA graphs.
+        benchmark_mode: Architecture-neutral ``replay`` or ``event`` timing.
+            The effective default is ``replay``.
+        benchmark_retries: Timed replay samples sharing the total ``rep``
+            measurement budget.
+        use_cuda_graph: Deprecated compatibility alias for
+            ``benchmark_mode``.
         op_id: Globally namespaced logical operator identifier.
         variant: Single-segment implementation/model variant.
         flagtune_dtype_resolver: Optional trusted code-side callable receiving
@@ -106,12 +113,38 @@ class Flagtuner(Autotuner):
         prune_configs_by: Optional[Dict] = None,
         warmup=25,
         rep=100,
-        use_cuda_graph=False,
+        use_cuda_graph=None,
+        benchmark_mode: Optional[str] = None,
+        benchmark_retries: int = 10,
         op_id: Optional[str] = None,
         variant: Optional[str] = None,
         flagtune_dtype_resolver: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ):
         """Initialize Triton's baseline tuner and lazy FlagTune state."""
+        if benchmark_mode is not None and use_cuda_graph is not None:
+            raise ValueError(
+                "benchmark_mode and deprecated use_cuda_graph cannot be supplied together"
+            )
+        if use_cuda_graph is not None:
+            warnings.warn(
+                "use_cuda_graph is deprecated; use benchmark_mode='replay' or "
+                "benchmark_mode='event'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            selected_mode = (
+                BenchmarkMode.REPLAY if use_cuda_graph else BenchmarkMode.EVENT
+            )
+        else:
+            selected_mode = BenchmarkMode(
+                benchmark_mode if benchmark_mode is not None else "replay"
+            )
+        resolved_benchmark = resolve_benchmarker(
+            selected_mode,
+            warmup_ms=warmup,
+            measurement_ms=rep,
+            n_retries=benchmark_retries,
+        )
         super().__init__(
             fn,
             arg_names,
@@ -122,10 +155,9 @@ class Flagtuner(Autotuner):
             pre_hook=pre_hook,
             post_hook=post_hook,
             prune_configs_by=prune_configs_by,
-            warmup=warmup,
-            rep=rep,
-            use_cuda_graph=use_cuda_graph,
+            do_bench=resolved_benchmark.benchmark,
         )
+        self.benchmark_protocol = resolved_benchmark.protocol
 
         if (op_id is None) != (variant is None):
             raise ValueError("FlagTune op_id and variant must be supplied together")
@@ -137,7 +169,7 @@ class Flagtuner(Autotuner):
 
     def _runtime_identity(self, kwargs: Dict[str, Any]):
         """Build the trusted GPU/dtype identity for the current kernel call."""
-        from triton.flagtune.identity import (
+        from triton.flagtune.contract.identity import (
             ModelIdentity,
             discover_gpu_metadata,
             make_dtype_key,
@@ -179,7 +211,7 @@ class Flagtuner(Autotuner):
             return None
 
         try:
-            from triton.flagtune.predict import load_model_bundle, make_config_proposer
+            from triton.flagtune.runtime.proposer import load_model_bundle, make_config_proposer
 
             loaded = load_model_bundle(
                 identity.op_id,
@@ -276,7 +308,9 @@ def flagtune(
     post_hook=None,
     warmup=25,
     rep=100,
-    use_cuda_graph=False,
+    use_cuda_graph=None,
+    benchmark_mode: Optional[str] = None,
+    benchmark_retries: int = 10,
 ):
     """Decorate a Triton kernel with :class:`Flagtuner`.
 
@@ -294,7 +328,12 @@ def flagtune(
         post_hook: Optional benchmark post-hook.
         warmup: Benchmark warmup iterations.
         rep: Benchmark repetitions.
-        use_cuda_graph: Enable Triton's CUDA graph benchmark path.
+        benchmark_mode: Architecture-neutral ``replay`` or ``event`` timing.
+            Omission defaults to ``replay``.
+        benchmark_retries: Timed replay samples sharing the total ``rep``
+            measurement budget.
+        use_cuda_graph: Deprecated compatibility alias for
+            ``benchmark_mode``.
 
     Returns:
         A decorator that replaces a JIT kernel with a :class:`Flagtuner`.
@@ -320,6 +359,8 @@ def flagtune(
             warmup=warmup,
             rep=rep,
             use_cuda_graph=use_cuda_graph,
+            benchmark_mode=benchmark_mode,
+            benchmark_retries=benchmark_retries,
             op_id=op_id,
             variant=variant,
             flagtune_dtype_resolver=flagtune_dtype_resolver,

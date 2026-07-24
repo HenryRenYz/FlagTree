@@ -13,7 +13,7 @@ Environment variables:
     document. Its top level may directly map artifact keys, or put those keys
     below ``models``. It overrides all packaged and remote-manifest entries.
   * ``FLAGTUNE_MODEL_CACHE``: indirectly selects the manifest cache location
-    through :func:`triton.flagtune.model_manager._cache_root`.
+    through :func:`triton.flagtune.runtime.model_loader._cache_root`.
 
 An entry has the form ``{"versions": {"1.2.3": {"url": "https://..."}}}``.
 The optional ``latest`` and ``sha256`` fields seen in examples are currently
@@ -31,8 +31,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from triton.flagtune.artifacts import parse_model_version, validate_model_version
-from triton.flagtune.identity import ModelIdentity
+from triton.flagtune.contract.archive import parse_model_version, validate_model_version
+from triton.flagtune.contract.identity import ModelIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ def _env_model_urls() -> Optional[Dict[str, Any]]:
 
 def _cached_manifest_path() -> Path:
     """Return the shared manifest path inside the model-manager cache root."""
-    from triton.flagtune.model_manager import _cache_root
+    from triton.flagtune.runtime.model_loader import _cache_root
     return _cache_root() / "manifest.json"
 
 

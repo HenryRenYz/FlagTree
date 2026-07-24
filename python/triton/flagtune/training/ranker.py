@@ -26,14 +26,14 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 import numpy as np
 
 from triton.flagtune._version import __version__ as flagtune_version
-from triton.flagtune.registry import (
+from triton.flagtune.contract.operator_schema import (
     VariantInfo,
     load_operator_config,
     model_config_sha256,
     variant_to_model_config,
 )
-from triton.flagtune.identity import ModelIdentity
-from triton.flagtune.artifacts import MODEL_ARCHIVE_NAME, validate_model_version, write_model_archive
+from triton.flagtune.contract.identity import ModelIdentity
+from triton.flagtune.contract.archive import MODEL_ARCHIVE_NAME, validate_model_version, write_model_archive
 
 
 class TrainingDataError(ValueError):
@@ -295,7 +295,7 @@ def _group_plan(
                     raise TrainingDataError(f"benchmark data line {line_number} has incomplete GPU/dtype identity")
                 if not isinstance(input_dtypes, list) or not isinstance(output_dtypes, list):
                     raise TrainingDataError(f"benchmark data line {line_number} must contain dtype lists")
-                from triton.flagtune.identity import make_dtype_key
+                from triton.flagtune.contract.identity import make_dtype_key
 
                 if make_dtype_key([*input_dtypes, *output_dtypes]) != dtype_key:
                     raise TrainingDataError(

@@ -7,9 +7,9 @@ import tarfile
 import numpy as np
 import pytest
 
-from triton.flagtune import predict
-from triton.flagtune.artifacts import read_model_archive, write_model_archive
-from triton.flagtune.identity import (
+from triton.flagtune.runtime import proposer as predict
+from triton.flagtune.contract.archive import read_model_archive, write_model_archive
+from triton.flagtune.contract.identity import (
     ModelIdentity,
     ModelIdentityError,
     artifact_key,
@@ -18,8 +18,8 @@ from triton.flagtune.identity import (
     make_gpu_key,
     normalize_dtype_name,
 )
-from triton.flagtune.model_manager import FlagTuneModelManager, IncompatibleModelError
-from triton.flagtune.registry import (
+from triton.flagtune.runtime.model_loader import FlagTuneModelManager, IncompatibleModelError
+from triton.flagtune.contract.operator_schema import (
     BUILTIN_OPS,
     FlagTuneConfigError,
     load_model_config,
@@ -264,7 +264,7 @@ def test_cache_resolution_keeps_version_below_derived_pair(tmp_path, monkeypatch
 
 def test_remote_manifest_uses_derived_pair_key(monkeypatch):
     """Address remote artifacts with op_id/variant and retain version selection."""
-    from triton.flagtune.model_urls import resolve_url
+    from triton.flagtune.runtime.model_sources import resolve_url
 
     manifest = {
         "models": {
@@ -412,7 +412,7 @@ def test_bundle_identity_isolates_gpu_and_dtype(tmp_path, monkeypatch, declared_
 
 def test_untrained_empty_xgboost_model_runs_the_candidate_pipeline(tmp_path, monkeypatch):
     xgboost = pytest.importorskip("xgboost")
-    from triton.flagtune.training import export_ranker_model
+    from triton.flagtune.training.ranker import export_ranker_model
 
     feature_names = ["M", "N", "tile", "grid", "ratio", "aligned", "power", "log_tile"]
     empty_model = xgboost.XGBRanker(n_estimators=0)
@@ -444,7 +444,7 @@ def test_untrained_empty_xgboost_model_runs_the_candidate_pipeline(tmp_path, mon
 def test_loaded_model_cache_isolated_by_explicit_version(tmp_path, monkeypatch):
     """Keep two revisions of the same four-component identity independent."""
     xgboost = pytest.importorskip("xgboost")
-    from triton.flagtune.training import export_ranker_model
+    from triton.flagtune.training.ranker import export_ranker_model
 
     variant = parse_operator_config(_config()).get_variant("general")
     model = xgboost.XGBRanker(n_estimators=0)
@@ -476,7 +476,7 @@ def test_modified_config_is_rejected_by_embedded_model_digest(tmp_path, monkeypa
     """Reject a valid YAML config that no longer belongs to its XGBoost file."""
     xgboost = pytest.importorskip("xgboost")
     yaml = pytest.importorskip("yaml")
-    from triton.flagtune.training import export_ranker_model
+    from triton.flagtune.training.ranker import export_ranker_model
 
     variant = parse_operator_config(_config()).get_variant("general")
     model = xgboost.XGBRanker(n_estimators=0)
@@ -505,7 +505,7 @@ def test_modified_config_is_rejected_by_embedded_model_digest(tmp_path, monkeypa
 def test_embedded_xgboost_feature_order_must_match_config(tmp_path, monkeypatch):
     """Reject weights whose named columns were reordered after export."""
     xgboost = pytest.importorskip("xgboost")
-    from triton.flagtune.training import export_ranker_model
+    from triton.flagtune.training.ranker import export_ranker_model
 
     variant = parse_operator_config(_config()).get_variant("general")
     model = xgboost.XGBRanker(n_estimators=0)
@@ -532,47 +532,3 @@ def test_embedded_xgboost_feature_order_must_match_config(tmp_path, monkeypatch)
 
     with pytest.raises(IncompatibleModelError, match="feature order mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
-
-
-def test_migration_reexports_weights_under_derived_pair_path(tmp_path, monkeypatch):
-    """Preserve predictions while refreshing config identity and digest."""
-    xgboost = pytest.importorskip("xgboost")
-    yaml = pytest.importorskip("yaml")
-    from triton.flagtune.migration import LEGACY_MODEL_VARIANTS, migrate_ranker_model
-
-    assert LEGACY_MODEL_VARIANTS == {
-        "mm_general_tma": "general_tma",
-        "gemv": "gemv",
-        "mm_splitk": "splitk",
-    }
-
-    operator_config = tmp_path / "operator.yaml"
-    combined_config = {
-        "schema_version": 3,
-        **_config(),
-        "pretune": {"shape": {}, "dispatch": {}, "benchmark": {}},
-    }
-    operator_config.write_text(yaml.safe_dump(combined_config, sort_keys=False), encoding="utf-8")
-    variant = parse_operator_config(_config()).get_variant("general")
-    features = np.arange(4 * len(variant.feature_names), dtype=float).reshape(4, len(variant.feature_names))
-    ranker = xgboost.XGBRanker(n_estimators=2, max_depth=2, n_jobs=1)
-    ranker.fit(features, np.asarray([0.0, 1.0, 2.0, 3.0]), group=[4])
-    expected = ranker.predict(features)
-    source = tmp_path / "source.json"
-    ranker.save_model(str(source))
-
-    output_root = tmp_path / "models"
-    target = migrate_ranker_model(
-        source,
-        operator_config,
-        "general",
-        output_root,
-        gpu=GPU,
-        dtypes=DTYPES,
-        model_version=MODEL_VERSION,
-        training_summary={"source": "unit-test"},
-    )
-    assert target == output_root / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / MODEL_VERSION / "model.tar.gz"
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(output_root))
-    loaded = FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
-    np.testing.assert_allclose(loaded.predictor.predict(features), expected)

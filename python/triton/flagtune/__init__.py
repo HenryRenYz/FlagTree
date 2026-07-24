@@ -19,7 +19,7 @@ import os
 
 from triton.flagtune._version import __version__
 from triton.flagtune.core.interfaces import BenchmarkFn, ConfigProposer
-from triton.flagtune.flagtuner import Flagtuner, flagtune
+from triton.flagtune.runtime.autotuner import Flagtuner, flagtune
 
 _ENABLED = None
 
@@ -48,10 +48,10 @@ def load_model_bundle(
     """Load the self-contained runtime bundle for an exact operator variant.
 
     Arguments and exceptions are forwarded lazily to
-    :func:`triton.flagtune.predict.load_model_bundle`, avoiding XGBoost imports
+    :func:`triton.flagtune.runtime.proposer.load_model_bundle`, avoiding XGBoost imports
     until a model is actually requested.
     """
-    from triton.flagtune.predict import load_model_bundle as _load
+    from triton.flagtune.runtime.proposer import load_model_bundle as _load
 
     return _load(
         op_id,
@@ -76,7 +76,7 @@ def make_config_proposer(
     loading happen during this call. Their errors propagate to the caller so
     integration layers can apply their normal fallback policy.
     """
-    from triton.flagtune.predict import make_config_proposer as _make
+    from triton.flagtune.runtime.proposer import make_config_proposer as _make
 
     return _make(
         op_id,

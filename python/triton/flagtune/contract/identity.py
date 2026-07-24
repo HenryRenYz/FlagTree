@@ -9,7 +9,7 @@ model manager require an exact match at load time.
 GPU keys contain vendor, normalized device name, and a backend-native
 architecture suffix.  NVIDIA uses values such as ``sm90`` while AMD uses values
 such as ``gfx942``.  Device detection and backend validation live in
-``triton.flagtune.device``; this module only canonicalizes already validated
+``triton.flagtune.runtime.device``; this module only canonicalizes already validated
 identity metadata.
 """
 
@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from triton.flagtune.expressions import SafeExpressionError
+from triton.flagtune.contract.expressions import SafeExpressionError
 
 
 class ModelIdentityError(SafeExpressionError):
@@ -190,7 +190,7 @@ def discover_gpu_metadata() -> Mapping[str, Any]:
     Device ordinal and UUID are intentionally excluded so identical cards on
     one or more hosts resolve to the same model identity.
     """
-    from triton.flagtune.device import probe_flagtune_device
+    from triton.flagtune.runtime.device import probe_flagtune_device
 
     descriptor = probe_flagtune_device()
     return gpu_metadata(
