@@ -27,13 +27,14 @@ _ENABLED = None
 def is_enabled() -> bool:
     """Return whether Triton's FlagTune integration is enabled for this process.
 
-    ``TRITON_USE_FLAGTUNE`` must be exactly ``"1"`` after whitespace stripping.
+    ``FLAGTUNE_ENABLE`` must be exactly ``"1"`` after whitespace stripping.
     The result is cached on first access. This switch remains independent from
-    FlagGems' legacy ``USE_FLAGTUNE`` expanded-config control.
+    FlagGems' independent ``FLAGGEMS_FLAGTUNE_EXPANDED`` expanded-config
+    control.
     """
     global _ENABLED
     if _ENABLED is None:
-        _ENABLED = os.environ.get("TRITON_USE_FLAGTUNE", "").strip() == "1"
+        _ENABLED = os.environ.get("FLAGTUNE_ENABLE", "").strip() == "1"
     return _ENABLED
 
 

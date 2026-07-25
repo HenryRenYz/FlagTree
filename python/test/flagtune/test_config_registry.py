@@ -101,7 +101,7 @@ def clean_model_manager(monkeypatch):
     predict._MODEL_MANAGER = None
     predict._TOP_K_CACHE = None
     monkeypatch.delenv("FLAGTUNE_DISABLE_OPS", raising=False)
-    monkeypatch.delenv("TRITON_FLAGTUNE_TOP_K", raising=False)
+    monkeypatch.delenv("FLAGTUNE_TOP_K", raising=False)
     yield
     predict._MODEL_MANAGER = None
     predict._TOP_K_CACHE = None
@@ -241,7 +241,7 @@ def test_registration_rejects_unknown_variables_and_unsafe_identities():
 def test_operator_variant_resolves_as_nested_local_path(tmp_path, monkeypatch):
     model_path = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / MODEL_VERSION / "model.tar.gz"
     _archive(model_path)
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     assert FlagTuneModelManager().resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY) == model_path
 
@@ -250,7 +250,7 @@ def test_cache_resolution_keeps_version_below_derived_pair(tmp_path, monkeypatch
     """Resolve versioned cache bundles beneath op_id/variant."""
     model_path = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / "2.0.0" / "model.tar.gz"
     _archive(model_path)
-    monkeypatch.delenv("TRITON_FLAGTUNE_MODEL_DIR", raising=False)
+    monkeypatch.delenv("FLAGTUNE_MODEL_DIR", raising=False)
     monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
 
     assert FlagTuneModelManager().resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY) == model_path
@@ -346,7 +346,7 @@ def test_bundle_identity_must_match_requested_pair(tmp_path, monkeypatch):
     config = variant_to_model_config(wrong_variant, _identity("vendor/other"), DTYPES, GPU, MODEL_VERSION)
     model_path = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / MODEL_VERSION / "model.tar.gz"
     _archive(model_path, yaml.safe_dump(config, sort_keys=False).encode())
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     with pytest.raises(IncompatibleModelError, match="identity mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
@@ -359,7 +359,7 @@ def test_bundle_version_must_match_version_directory(tmp_path, monkeypatch):
     config = variant_to_model_config(variant, _identity(), DTYPES, GPU, "1.0.0")
     model_path = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / "2.0.0" / "model.tar.gz"
     _archive(model_path, yaml.safe_dump(config, sort_keys=False).encode())
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     with pytest.raises(IncompatibleModelError, match="version mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
@@ -398,7 +398,7 @@ def test_bundle_identity_isolates_gpu_and_dtype(tmp_path, monkeypatch, declared_
     config = variant_to_model_config(variant, declared, declared_dtypes, declared_gpu, MODEL_VERSION)
     requested = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / MODEL_VERSION / "model.tar.gz"
     _archive(requested, yaml.safe_dump(config, sort_keys=False).encode())
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     with pytest.raises(IncompatibleModelError, match="identity mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
@@ -424,8 +424,8 @@ def test_untrained_empty_xgboost_model_runs_the_candidate_pipeline(tmp_path, mon
     )
     assert empty_model.get_booster().get_dump() == []
 
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
-    monkeypatch.setenv("TRITON_FLAGTUNE_TOP_K", "2")
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_TOP_K", "2")
 
     proposer = predict.make_config_proposer("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
     result = proposer(None, {"M": 33, "N": 8, "K": 64}, [], {})
@@ -454,7 +454,7 @@ def test_loaded_model_cache_isolated_by_explicit_version(tmp_path, monkeypatch):
             gpu=GPU,
             model_version=version,
         )
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
     manager = FlagTuneModelManager()
 
     first = manager.load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY, model_version="1.0.0")
@@ -490,7 +490,7 @@ def test_modified_config_is_rejected_by_embedded_model_digest(tmp_path, monkeypa
     config["features"].pop()
     members["flagtune_config.yaml"] = yaml.safe_dump(config, sort_keys=False).encode()
     write_model_archive(exported.model_path, members)
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     with pytest.raises(IncompatibleModelError, match="digest mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
@@ -522,7 +522,7 @@ def test_embedded_xgboost_feature_order_must_match_config(tmp_path, monkeypatch)
     changed.save_model(str(loose_path))
     members["xgboost_ranker.json"] = loose_path.read_bytes()
     write_model_archive(exported.model_path, members)
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
 
     with pytest.raises(IncompatibleModelError, match="feature order mismatch"):
         FlagTuneModelManager().load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)

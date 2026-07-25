@@ -8,7 +8,7 @@ callback is supplied, it times the predicted seeds, asks the GA searcher for
 additional candidates, then returns the unique lowest-latency Top-K results.
 
 Environment variables:
-  * ``TRITON_FLAGTUNE_TOP_K``: integer number of returned candidates; defaults
+  * ``FLAGTUNE_TOP_K``: integer number of returned candidates; defaults
     to ``10`` and is read once per process. Invalid integers raise on first use.
   * ``FLAGTUNE_DISABLE_OPS``: comma-separated ``*``, ``op_id``,
     ``op_id/variant``, or full artifact-key selectors. A matching proposer
@@ -51,7 +51,7 @@ def _top_k() -> int:
     """Read and memoize the requested candidate count for this process."""
     global _TOP_K_CACHE
     if _TOP_K_CACHE is None:
-        _TOP_K_CACHE = int(os.environ.get("TRITON_FLAGTUNE_TOP_K", "10"))
+        _TOP_K_CACHE = int(os.environ.get("FLAGTUNE_TOP_K", "10"))
     return _TOP_K_CACHE
 
 
@@ -136,7 +136,7 @@ def make_config_proposer(
         ImportError: If a required model dependency such as XGBoost is missing.
 
     Notes:
-        ``TRITON_FLAGTUNE_TOP_K`` is parsed once per process on first use and
+        ``FLAGTUNE_TOP_K`` is parsed once per process on first use and
         defaults to 10. ``FLAGTUNE_DISABLE_OPS`` accepts ``*`` or an exact
         ``op_id`` or exact ``op_id/variant``; a disabled model returns an empty proposer so
         integration layers can use their normal fallback.

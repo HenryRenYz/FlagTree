@@ -15,7 +15,7 @@ Usage:
     def kernel(...):
         ...
 
-When op_id and variant are set and TRITON_USE_FLAGTUNE=1, the tuner
+When op_id and variant are set and FLAGTUNE_ENABLE=1, the tuner
 replaces the pruned config list with XGBoost-predicted Top-K configs
 via the ConfigProposer API.  Otherwise behaves exactly like Autotuner.
 """
@@ -24,12 +24,46 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from triton.runtime.autotuner import Autotuner
 from triton.runtime.benchmark import BenchmarkMode, resolve_benchmarker
 
 logger = logging.getLogger(__name__)
+
+
+def _infer_tensor_dtypes(values: Iterable[Any]) -> Tuple[Any, ...]:
+    """Return tensor dtypes in argument order using LibTuner's contract.
+
+    Only ``torch.Tensor`` values and Triton ``TensorDescriptor`` values whose
+    ``base`` is a tensor contribute to a model identity. In particular, an
+    arbitrary object merely exposing a ``dtype`` attribute is not a tensor
+    argument. This exactly matches FlagGems LibTuner's default identity and
+    cache-key extraction; callers with a different identity order or source
+    must provide ``flagtune_dtype_resolver`` explicitly.
+
+    Returns:
+        A tuple of dtypes in the supplied argument order. An empty tuple is
+        returned when PyTorch is unavailable or no supported tensor argument
+        is present.
+    """
+    try:
+        import torch
+    except ImportError:
+        return ()
+
+    try:
+        from triton.tools.tensor_descriptor import TensorDescriptor
+    except ImportError:
+        TensorDescriptor = ()
+
+    dtypes = []
+    for value in values:
+        if isinstance(value, torch.Tensor):
+            dtypes.append(value.dtype)
+        elif isinstance(value, TensorDescriptor) and isinstance(value.base, torch.Tensor):
+            dtypes.append(value.base.dtype)
+    return tuple(dtypes)
 
 
 def _configs_to_dicts(configs: List[Any], param_fields: List[str]) -> List[Dict[str, Any]]:
@@ -63,7 +97,7 @@ class Flagtuner(Autotuner):
 
     This subclass first executes Triton's normal ``prune_configs`` logic.  If
     ``op_id`` and ``variant`` are supplied and
-    ``TRITON_USE_FLAGTUNE=1``, it lazily creates a FlagTune proposer and replaces
+    ``FLAGTUNE_ENABLE=1``, it lazily creates a FlagTune proposer and replaces
     the pruned list with predicted candidates.  Initialization, prediction, or
     config-conversion failures fall back to Triton's pruned configs and emit a
     warning instead of breaking kernel execution.
@@ -171,9 +205,7 @@ class Flagtuner(Autotuner):
 
         arguments = {**(self.nargs or {}), **kwargs}
         if self._flagtune_dtype_resolver is None:
-            dtypes = tuple(value.dtype
-                           for name in self.arg_names
-                           if (value := arguments.get(name)) is not None and hasattr(value, "dtype"))
+            dtypes = _infer_tensor_dtypes(arguments[name] for name in self.arg_names if name in arguments)
         else:
             dtypes = tuple(self._flagtune_dtype_resolver(arguments))
         if not dtypes:

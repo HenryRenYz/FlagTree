@@ -115,7 +115,7 @@ def test_manager_selects_highest_semver_and_supports_explicit_pin(tmp_path, monk
         write_model_archive(identity_root / version / "model.tar.gz", _members(version.encode()))
     (identity_root / "invalid").mkdir()
     (identity_root / "3.0.0").mkdir()
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
     manager = FlagTuneModelManager()
 
     selected = manager.resolve("vendor/mm", "general", gpu_key=IDENTITY_PATH[0], dtype_key=IDENTITY_PATH[-1])
@@ -137,7 +137,7 @@ def test_manager_does_not_fall_back_to_legacy_loose_bundle(tmp_path, monkeypatch
     identity_root.mkdir(parents=True)
     for name, payload in _members().items():
         (identity_root / name).write_bytes(payload)
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
     monkeypatch.setenv("FLAGTUNE_DISABLE_REMOTE", "1")
 
     with pytest.raises(FileNotFoundError):
@@ -150,7 +150,7 @@ def test_selected_corrupt_highest_version_does_not_fall_back(tmp_path, monkeypat
     corrupt = identity_root / "2.0.0" / "model.tar.gz"
     corrupt.parent.mkdir(parents=True)
     corrupt.write_bytes(b"corrupt")
-    monkeypatch.setenv("TRITON_FLAGTUNE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path))
     manager = FlagTuneModelManager()
     assert manager.resolve("vendor/mm", "general", gpu_key=IDENTITY_PATH[0], dtype_key=IDENTITY_PATH[-1]) == corrupt
     with pytest.raises(IncompatibleModelError, match="invalid FlagTune model archive"):

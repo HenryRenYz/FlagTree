@@ -38,7 +38,7 @@ class _FakeActive:
 
 
 def test_probe_cuda_uses_native_architecture_and_explicit_device(monkeypatch):
-    from triton.flagtune import device
+    from triton.flagtune.runtime import device
 
     monkeypatch.setattr(
         device,
@@ -56,7 +56,7 @@ def test_probe_cuda_uses_native_architecture_and_explicit_device(monkeypatch):
 
 
 def test_probe_hip_preserves_gfx_architecture(monkeypatch):
-    from triton.flagtune import device
+    from triton.flagtune.runtime import device
 
     monkeypatch.setattr(
         device,
@@ -72,7 +72,7 @@ def test_probe_hip_preserves_gfx_architecture(monkeypatch):
 
 
 def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
-    from triton.flagtune import device
+    from triton.flagtune.runtime import device
 
     monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("xpu", "pvc"))
     with pytest.raises(
@@ -83,7 +83,7 @@ def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
 
 
 def test_probe_rejects_invalid_native_architecture(monkeypatch):
-    from triton.flagtune import device
+    from triton.flagtune.runtime import device
 
     monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("cuda", "hopper"))
     with pytest.raises(DeviceProbeError, match="invalid architecture"):

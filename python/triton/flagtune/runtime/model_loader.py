@@ -8,7 +8,7 @@ used lazily by :mod:`predict`; callers normally use ``load_model_bundle`` or
 ``make_config_proposer`` rather than constructing archive paths themselves.
 
 Environment variables:
-  * ``TRITON_FLAGTUNE_MODEL_DIR``: optional local model root with highest
+  * ``FLAGTUNE_MODEL_DIR``: optional local model root with highest
     precedence. It must contain ``gpu_key/op_id/variant/dtype_key/version/``.
   * ``FLAGTUNE_MODEL_CACHE``: writable cache root for downloaded bundles and
     the remote URL manifest. Defaults to ``~/.flagtree/flagtune_models``.
@@ -63,7 +63,7 @@ def _cache_root() -> Path:
 
 def _user_model_root() -> Optional[Path]:
     """Return the optional highest-priority user model root."""
-    env = os.environ.get("TRITON_FLAGTUNE_MODEL_DIR", "").strip()
+    env = os.environ.get("FLAGTUNE_MODEL_DIR", "").strip()
     return Path(env) if env else None
 
 
