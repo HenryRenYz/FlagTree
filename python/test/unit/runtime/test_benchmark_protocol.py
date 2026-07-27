@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from triton.backends.driver import BenchmarkerCapability
-from triton.runtime import benchmark as benchmark_module
+from triton.runtime import benchmark_protocol as benchmark_module
 from triton.testing import do_bench_cudagraph
 
 

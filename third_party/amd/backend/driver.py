@@ -866,6 +866,7 @@ class HIPDriver(GPUDriver):
         from triton.testing import do_bench
         return do_bench
 
+    # flagtree flagtune: Expose graph replay through the backend capability interface.
     def get_replay_benchmarker(self):
         from triton.backends.driver import BenchmarkerCapability
         from triton.testing import do_bench_cudagraph
