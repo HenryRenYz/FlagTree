@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import io
 import math
-import tarfile
 import numpy as np
 import pytest
 
@@ -63,6 +62,44 @@ def _archive(path, config=b"{}", model=b"{}"):
     )
 
 
+def _configure_remote_download(monkeypatch, tmp_path, payload, *, url="https://example.invalid/model.tar.gz", sha256=None):
+    requests = []
+    digest = sha256 or hashlib.sha256(payload).hexdigest()
+
+    class Response:
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return payload
+
+    def urlopen(request, **_kwargs):
+        requests.append(request)
+        return Response()
+
+    monkeypatch.delenv("FLAGTUNE_MODEL_DIR", raising=False)
+    monkeypatch.delenv("FLAGTUNE_DISABLE_REMOTE", raising=False)
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv(
+        "FLAGTUNE_MODEL_URLS",
+        json.dumps({
+            "models": {
+                f"{GPU_KEY}/vendor/mm/general/{DTYPE_KEY}": {
+                    "versions": {
+                        "2.0.0": {"url": url, "sha256": digest},
+                    },
+                },
+            },
+        }),
+    )
+    monkeypatch.setattr("triton.flagtune.runtime.model_sources._open_https", urlopen)
+    return requests
+
+
 def _config():
     return {
         "op_id": "vendor/mm",
@@ -93,6 +130,25 @@ def _config():
             }
         },
     }
+
+
+def _export_model_archive(root, model_version):
+    xgboost = pytest.importorskip("xgboost")
+    from triton.flagtune.training.ranker import export_ranker_model
+
+    variant = parse_operator_config(_config()).get_variant("general")
+    model = xgboost.XGBRanker(n_estimators=0)
+    model.fit(np.zeros((2, len(variant.feature_names))), np.zeros(2), group=[2])
+    return export_ranker_model(
+        model,
+        variant,
+        root,
+        {},
+        identity=_identity(),
+        dtypes=DTYPES,
+        gpu=GPU,
+        model_version=model_version,
+    ).model_path
 
 
 @pytest.fixture(autouse=True)
@@ -265,8 +321,8 @@ def test_remote_manifest_uses_derived_pair_key(monkeypatch):
             f"{GPU_KEY}/vendor/mm/general/{DTYPE_KEY}": {
                 "latest": "1.0.0",
                 "versions": {
-                    "1.0.0": {"url": "https://example.invalid/old.tgz"},
-                    "2.0.0": {"url": "https://example.invalid/model.tgz"},
+                    "1.0.0": {"url": "https://example.invalid/old.tgz", "sha256": "1" * 64},
+                    "2.0.0": {"url": "https://example.invalid/model.tgz", "sha256": "2" * 64},
                 },
             }
         }
@@ -278,16 +334,25 @@ def test_remote_manifest_uses_derived_pair_key(monkeypatch):
 
 def test_remote_download_uses_pair_and_manifest_version(tmp_path, monkeypatch):
     """Download a pair bundle into its exact versioned cache directory."""
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode="w:gz") as handle:
-        for name, payload in (
-            ("flagtune_config.yaml", b"{}"),
-            ("xgboost_ranker.json", b"{}"),
-            ("training_summary.json", b"{}"),
-        ):
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            handle.addfile(member, io.BytesIO(payload))
+    source = _export_model_archive(tmp_path / "source", "2.0.0")
+    archive_payload = source.read_bytes()
+    requests = _configure_remote_download(
+        monkeypatch,
+        tmp_path,
+        archive_payload,
+        url="https://example.invalid/model.tgz",
+    )
+
+    expected = tmp_path / "cache" / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / "2.0.0" / "model.tar.gz"
+    assert FlagTuneModelManager().resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY) == expected
+    assert expected.is_file()
+    assert list(expected.parent.iterdir()) == [expected]
+    assert len(requests) == 1
+
+
+def test_remote_download_rejects_digest_mismatch(tmp_path, monkeypatch):
+    source = _archive(tmp_path / "source" / "model.tar.gz")
+    payload = source.read_bytes()
 
     class Response:
 
@@ -298,26 +363,162 @@ def test_remote_download_uses_pair_and_manifest_version(tmp_path, monkeypatch):
             return False
 
         def read(self):
-            return archive.getvalue()
+            return payload
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
+    monkeypatch.delenv("FLAGTUNE_MODEL_DIR", raising=False)
+    monkeypatch.delenv("FLAGTUNE_DISABLE_REMOTE", raising=False)
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv(
         "FLAGTUNE_MODEL_URLS",
         json.dumps({
             "models": {
                 f"{GPU_KEY}/vendor/mm/general/{DTYPE_KEY}": {
-                    "latest": "2.0.0",
-                    "versions": {"2.0.0": {"url": "https://example.invalid/model.tgz"}},
-                }
-            }
+                    "versions": {
+                        "2.0.0": {
+                            "url": "https://example.invalid/model.tar.gz",
+                            "sha256": "0" * 64,
+                        },
+                    },
+                },
+            },
         }),
     )
+    monkeypatch.setattr(
+        "triton.flagtune.runtime.model_sources._open_https",
+        lambda *_args, **_kwargs: Response(),
+    )
 
-    expected = tmp_path / GPU_KEY / "vendor" / "mm" / "general" / DTYPE_KEY / "2.0.0" / "model.tar.gz"
-    assert FlagTuneModelManager().resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY) == expected
-    assert expected.is_file()
-    assert list(expected.parent.iterdir()) == [expected]
+    with pytest.raises(FileNotFoundError):
+        FlagTuneModelManager().resolve(
+            "vendor/mm",
+            "general",
+            gpu_key=GPU_KEY,
+            dtype_key=DTYPE_KEY,
+        )
+    assert not list((tmp_path / "cache").rglob("model.tar.gz"))
+    assert not list((tmp_path / "cache").rglob("*.tmp"))
+
+
+def test_remote_download_verifies_digest_and_reuses_cached_bytes(tmp_path, monkeypatch):
+    source = _export_model_archive(tmp_path / "source", "2.0.0")
+    payload = source.read_bytes()
+    requests = _configure_remote_download(monkeypatch, tmp_path, payload)
+    manager = FlagTuneModelManager()
+
+    first = manager.resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
+    second = manager.resolve("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
+
+    assert first == second
+    assert first.read_bytes() == payload
+    assert len(requests) == 1
+
+
+def test_remote_download_rejects_digest_valid_corrupt_archive(tmp_path, monkeypatch):
+    payload = b"not a gzip tar"
+    _configure_remote_download(monkeypatch, tmp_path, payload)
+
+    with pytest.raises(FileNotFoundError):
+        FlagTuneModelManager().resolve(
+            "vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY,
+        )
+    assert not list((tmp_path / "cache").rglob("model.tar.gz"))
+    assert not list((tmp_path / "cache").rglob("*.tmp"))
+
+
+def test_refresh_rejects_incompatible_remote_before_cache_commit(tmp_path, monkeypatch):
+    xgboost = pytest.importorskip("xgboost")
+    yaml = pytest.importorskip("yaml")
+    from triton.flagtune.training.ranker import export_ranker_model
+
+    variant = parse_operator_config(_config()).get_variant("general")
+    model = xgboost.XGBRanker(n_estimators=0)
+    model.fit(np.zeros((2, len(variant.feature_names))), np.zeros(2), group=[2])
+    cached = export_ranker_model(
+        model,
+        variant,
+        tmp_path / "cache",
+        {},
+        identity=_identity(),
+        dtypes=DTYPES,
+        gpu=GPU,
+        model_version="1.0.0",
+    ).model_path
+    remote = export_ranker_model(
+        model,
+        variant,
+        tmp_path / "remote",
+        {},
+        identity=_identity(),
+        dtypes=DTYPES,
+        gpu=GPU,
+        model_version="2.0.0",
+    ).model_path
+    members = read_model_archive(remote)
+    config = yaml.safe_load(members["flagtune_config.yaml"])
+    config["op_id"] = "vendor/other"
+    members["flagtune_config.yaml"] = yaml.safe_dump(config, sort_keys=False).encode()
+    write_model_archive(remote, members)
+    requests = _configure_remote_download(monkeypatch, tmp_path, remote.read_bytes())
+    monkeypatch.setenv("FLAGTUNE_MODEL_REFRESH", "1")
+
+    loaded = FlagTuneModelManager().load(
+        "vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY,
+    )
+
+    assert loaded.model_version == "1.0.0"
+    assert loaded.model_path == cached
+    assert len(requests) == 1
+    assert not (cached.parents[1] / "2.0.0" / "model.tar.gz").exists()
+
+
+def test_download_replaces_concurrently_cached_incompatible_bundle(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+
+    remote = _export_model_archive(tmp_path / "remote", "2.0.0")
+    concurrent = _export_model_archive(tmp_path / "concurrent", "2.0.0")
+    concurrent_members = read_model_archive(concurrent)
+    concurrent_config = yaml.safe_load(concurrent_members["flagtune_config.yaml"])
+    concurrent_config["op_id"] = "vendor/other"
+    concurrent_members["flagtune_config.yaml"] = yaml.safe_dump(
+        concurrent_config,
+        sort_keys=False,
+    ).encode()
+    write_model_archive(concurrent, concurrent_members)
+
+    requests = _configure_remote_download(monkeypatch, tmp_path, remote.read_bytes())
+    manager = FlagTuneModelManager()
+    validate_remote = manager._load_bundle_members
+
+    def publish_incompatible_bundle(identity, version, members, model_path):
+        loaded = validate_remote(identity, version, members, model_path)
+        if not model_path.exists():
+            model_path.parent.mkdir(parents=True)
+            model_path.write_bytes(concurrent.read_bytes())
+        return loaded
+
+    monkeypatch.setattr(manager, "_load_bundle_members", publish_incompatible_bundle)
+
+    selected = manager.resolve(
+        "vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY,
+    )
+
+    assert selected.read_bytes() == remote.read_bytes()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.invalid/model.tar.gz",
+    "https://example.invalid/model.zip",
+])
+def test_remote_download_rejects_non_https_or_non_archive_url(tmp_path, monkeypatch, url):
+    payload = b"not downloaded"
+    requests = _configure_remote_download(monkeypatch, tmp_path, payload, url=url)
+
+    with pytest.raises(FileNotFoundError):
+        FlagTuneModelManager().resolve(
+            "vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY,
+        )
+    assert requests == []
 
 
 def test_single_model_config_round_trip_preserves_contract(tmp_path):
@@ -464,6 +665,31 @@ def test_loaded_model_cache_isolated_by_explicit_version(tmp_path, monkeypatch):
     assert second.model_version == latest.model_version == "2.0.0"
     assert first.model_path != second.model_path
     assert second is latest
+
+
+def test_implicit_load_reuses_first_bundle_before_reresolution(tmp_path, monkeypatch):
+    model_root = tmp_path / "models"
+    _export_model_archive(model_root, "1.0.0")
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(model_root))
+    manager = FlagTuneModelManager()
+    resolve_calls = []
+    real_resolve = manager.resolve
+
+    def counted_resolve(*args, **kwargs):
+        resolve_calls.append(kwargs.get("model_version"))
+        return real_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "resolve", counted_resolve)
+    first = manager.load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
+
+    _export_model_archive(model_root, "2.0.0")
+    monkeypatch.setenv("FLAGTUNE_MODEL_REFRESH", "1")
+    monkeypatch.setenv("FLAGTUNE_MODEL_VERSION", "2.0.0")
+    second = manager.load("vendor/mm", "general", gpu_key=GPU_KEY, dtype_key=DTYPE_KEY)
+
+    assert second is first
+    assert second.model_version == "1.0.0"
+    assert resolve_calls == [None]
 
 
 def test_modified_config_is_rejected_by_embedded_model_digest(tmp_path, monkeypatch):

@@ -33,23 +33,33 @@ Environment variables:
     precedence. It must contain ``gpu_key/op_id/variant/dtype_key/version/``.
   * ``FLAGTUNE_MODEL_CACHE``: writable cache root for downloaded bundles and
     the remote URL manifest. Defaults to ``~/.flagtree/flagtune_models``.
+  * ``FLAGTUNE_MANIFEST_URL``: optional anonymous HTTPS manifest endpoint;
+    defaults to ``https://models.example.com/flagtune/manifest.json``.
+  * ``FLAGTUNE_MODEL_VERSION``: optional strict-SemVer exact version pin. An
+    explicit ``model_version=`` API argument takes precedence.
+  * ``FLAGTUNE_MODEL_REFRESH``: refreshes remote metadata only when its
+    whitespace-stripped value is exactly ``1``. Other values keep cache-first
+    behavior and do not perform periodic remote checks.
   * ``FLAGTUNE_DISABLE_REMOTE``: any non-empty value prevents network lookup;
     only the two local roots are searched.
 
-Remote payloads are validated before caching, but this module does not verify
-checksums advertised by manifests and does not coordinate cache writes between
-processes.  A corrupt, incompatible, or unavailable remote archive therefore
-falls through to the usual ``FileNotFoundError`` instead of a retry protocol.
+Remote artifacts and redirects must use HTTPS, and artifacts must carry a
+lowercase SHA-256 digest. The digest and complete bundle contract are validated
+before an atomic cache write. This module does not coordinate cache writes
+between processes. A corrupt, incompatible, or unavailable remote archive
+therefore falls back to a valid cache candidate during refresh, or to the usual
+``FileNotFoundError``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import numpy as np
@@ -70,6 +80,9 @@ from triton.flagtune.contract.operator_schema import (
     model_config_sha256,
     model_identity_from_config,
 )
+
+if TYPE_CHECKING:
+    from triton.flagtune.runtime.model_sources import RemoteArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -143,20 +156,54 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         raise
 
 
+def _environment_model_version(explicit: Optional[str]) -> Optional[str]:
+    """Resolve an explicit API version before the process environment pin."""
+    if explicit is not None:
+        return validate_model_version(explicit)
+    configured = os.environ.get("FLAGTUNE_MODEL_VERSION", "").strip()
+    return validate_model_version(configured) if configured else None
+
+
+def _refresh_requested() -> bool:
+    """Return whether the caller explicitly requested a remote refresh."""
+    return os.environ.get("FLAGTUNE_MODEL_REFRESH", "").strip() == "1"
+
+
+def _archive_is_valid(path: Path) -> bool:
+    try:
+        read_model_archive(path)
+    except (OSError, ModelArchiveError):
+        return False
+    return True
+
+
+def _archive_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class FlagTuneModelManager:
     """Manage model bundles for one process.
 
     ``load`` searches the optional user root, then the persistent cache, then
-    the URL resolver unless remote access is disabled.  If no revision was
-    requested, each local source selects the highest valid SemVer it contains.
+    the URL resolver unless remote access is disabled. If no revision was
+    requested, each source selects its own highest valid SemVer; source
+    priority is never replaced by a cross-source version comparison. A cache
+    hit performs no periodic remote check unless refresh is exactly ``1``.
     Successfully loaded predictors are retained only in this instance, keyed
-    by ``(ModelIdentity, resolved_version)``.  It does not hot-reload changed
-    files or evict models, so a long-lived process needs a new manager to see
-    a replacement archive.
+    by ``(ModelIdentity, resolved_version)``. The first implicit selection is
+    additionally retained by identity. The manager does not hot-reload changed
+    files or evict models. Set refresh and version controls before the first
+    model load, and start a new process to apply a replacement archive or a
+    changed environment pin to an already loaded model.
     """
 
     def __init__(self) -> None:
         self._loaded: Dict[Tuple[ModelIdentity, str], LoadedFlagTuneModel] = {}
+        self._implicit_loaded: Dict[ModelIdentity, LoadedFlagTuneModel] = {}
 
     def load(
         self,
@@ -174,7 +221,12 @@ class FlagTuneModelManager:
         variant contract and an XGBoost-compatible predictor.
         """
         identity = ModelIdentity(gpu_key, op_id, variant, dtype_key)
-        requested = validate_model_version(model_version) if model_version is not None else None
+        implicit = model_version is None
+        if implicit:
+            cached = self._implicit_loaded.get(identity)
+            if cached is not None:
+                return cached
+        requested = _environment_model_version(model_version)
         if requested is not None:
             cached = self._loaded.get((identity, requested))
             if cached is not None:
@@ -190,9 +242,13 @@ class FlagTuneModelManager:
         resolved_version = model_path.parent.name
         cached = self._loaded.get((identity, resolved_version))
         if cached is not None:
+            if implicit:
+                self._implicit_loaded[identity] = cached
             return cached
         loaded = self._load_bundle(identity, resolved_version, model_path)
         self._loaded[(identity, resolved_version)] = loaded
+        if implicit:
+            self._implicit_loaded[identity] = loaded
         return loaded
 
     def resolve(
@@ -206,14 +262,18 @@ class FlagTuneModelManager:
     ) -> Path:
         """Return the selected ``model.tar.gz`` path without unpacking it.
 
-        Search order is user root, persistent cache, then remote download.
-        This selection verifies path layout and SemVer directory names, but it
-        does not validate archive contents until :meth:`load` calls
-        :meth:`_load_bundle`.
+        Search order is user root, persistent cache, then remote download. A
+        version pin checks only that exact revision in each source. Normal
+        cache hits do not query the manifest; explicit refresh validates the
+        cache and compares its version and digest with freshly resolved remote
+        metadata. Local identity and predictor compatibility remain deferred to
+        :meth:`load`; downloads pass the complete bundle contract before the
+        atomic cache commit.
         """
         identity = ModelIdentity(gpu_key, op_id, variant, dtype_key)
-        requested = validate_model_version(model_version) if model_version is not None else None
+        requested = _environment_model_version(model_version)
         relative = _model_relative_path(identity)
+        refresh = _refresh_requested()
 
         user_root = _user_model_root()
         if user_root is not None:
@@ -222,21 +282,72 @@ class FlagTuneModelManager:
                 logger.info("FlagTune model found at user path: %s", candidate)
                 return candidate
 
-        candidate = self._select_local_archive(_cache_root() / relative, requested)
-        if candidate is not None:
+        candidate = self._select_local_archive(
+            _cache_root() / relative,
+            requested,
+            require_valid=refresh,
+        )
+        if candidate is not None and not refresh:
             logger.info("FlagTune model found in cache: %s", candidate)
             return candidate
 
-        if not os.environ.get("FLAGTUNE_DISABLE_REMOTE"):
-            downloaded = self._download(identity, requested)
+        if not refresh:
+            if not os.environ.get("FLAGTUNE_DISABLE_REMOTE"):
+                downloaded = self._download(identity, requested)
+                if downloaded is not None:
+                    return downloaded
+        elif requested is not None and candidate is not None and _archive_is_valid(candidate):
+            logger.info("FlagTune pinned model found in cache: %s", candidate)
+            return candidate
+        elif os.environ.get("FLAGTUNE_DISABLE_REMOTE"):
+            logger.warning("FlagTune refresh skipped because remote access is disabled")
+            if candidate is not None and _archive_is_valid(candidate):
+                return candidate
+        else:
+            from triton.flagtune.runtime.model_sources import resolve_artifact_info
+
+            remote = resolve_artifact_info(
+                identity.op_id,
+                identity.variant,
+                gpu_key=identity.gpu_key,
+                dtype_key=identity.dtype_key,
+                version=requested,
+                force_refresh=True,
+            )
+            valid_cache = candidate is not None and _archive_is_valid(candidate)
+            if requested is None and valid_cache and remote is not None:
+                cache_version = parse_model_version(candidate.parent.name)
+                remote_version = parse_model_version(remote.version)
+                if remote_version.selection_key < cache_version.selection_key:
+                    logger.info("Keeping newer cached FlagTune model: %s", candidate)
+                    return candidate
+                if remote_version.selection_key == cache_version.selection_key:
+                    if _archive_sha256(candidate) == remote.sha256:
+                        logger.info("Reusing matching cached FlagTune model: %s", candidate)
+                    else:
+                        logger.warning(
+                            "Ignoring changed digest for immutable FlagTune model version: %s",
+                            candidate,
+                        )
+                    return candidate
+            downloaded = self._download_artifact(identity, remote) if remote is not None else None
             if downloaded is not None:
                 return downloaded
+            if valid_cache:
+                logger.warning("Using cached FlagTune model after refresh failure: %s", candidate)
+                return candidate
 
         suffix = f" at version {requested!r}" if requested is not None else ""
         raise FileNotFoundError(f"FlagTune model not found for {identity.artifact_key!r}{suffix}. "
                                 f"Checked user dir, cache ({_cache_root()}), and remote.")
 
-    def _select_local_archive(self, identity_root: Path, requested: Optional[str]) -> Optional[Path]:
+    def _select_local_archive(
+        self,
+        identity_root: Path,
+        requested: Optional[str],
+        *,
+        require_valid: bool = False,
+    ) -> Optional[Path]:
         """Choose a non-symlink archive under one identity root.
 
         An explicit version must exist exactly.  Otherwise invalid directories,
@@ -245,7 +356,9 @@ class FlagTuneModelManager:
         """
         if requested is not None:
             candidate = identity_root / requested / MODEL_ARCHIVE_NAME
-            return candidate if candidate.is_file() and not candidate.is_symlink() else None
+            if not candidate.is_file() or candidate.is_symlink():
+                return None
+            return candidate if not require_valid or _archive_is_valid(candidate) else None
         if not identity_root.is_dir():
             return None
 
@@ -264,6 +377,11 @@ class FlagTuneModelManager:
                 logger.warning("Ignoring FlagTune version without %s: %s", MODEL_ARCHIVE_NAME, entry)
                 continue
             candidates.append((version.selection_key, archive))
+        if require_valid:
+            for _, archive in sorted(candidates, key=lambda item: item[0], reverse=True):
+                if _archive_is_valid(archive):
+                    return archive
+            return None
         return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
     def _validate_flagtune_version(self, config: Dict[str, Any], model_path: Path) -> None:
@@ -287,6 +405,16 @@ class FlagTuneModelManager:
             members = read_model_archive(model_path)
         except (OSError, ModelArchiveError) as exc:
             raise IncompatibleModelError(f"invalid FlagTune model archive at {model_path}: {exc}") from exc
+        return self._load_bundle_members(identity, model_version, members, model_path)
+
+    def _load_bundle_members(
+        self,
+        identity: ModelIdentity,
+        model_version: str,
+        members: Dict[str, bytes],
+        model_path: Path,
+    ) -> LoadedFlagTuneModel:
+        """Enforce the complete bundle contract for already-read archive members."""
         variant, config = load_model_config_bytes(members["flagtune_config.yaml"],
                                                   source=f"{model_path}:flagtune_config.yaml")
         declared = model_identity_from_config(config)
@@ -307,34 +435,73 @@ class FlagTuneModelManager:
         )
         return LoadedFlagTuneModel(identity, variant, predictor, model_path, model_version)
 
-    def _download(self, identity: ModelIdentity, model_version: Optional[str]) -> Optional[Path]:
+    def _download(
+        self,
+        identity: ModelIdentity,
+        model_version: Optional[str],
+        *,
+        force_refresh: bool = False,
+    ) -> Optional[Path]:
         """Resolve, validate, and atomically cache one remote archive, if configured."""
-        from triton.flagtune.runtime.model_sources import resolve_artifact
+        from triton.flagtune.runtime.model_sources import resolve_artifact_info
 
-        artifact = resolve_artifact(
+        artifact = resolve_artifact_info(
             identity.op_id,
             identity.variant,
             gpu_key=identity.gpu_key,
             dtype_key=identity.dtype_key,
             version=model_version,
+            force_refresh=force_refresh,
         )
         if artifact is None:
             logger.info("No remote URL configured for %s", identity.artifact_key)
             return None
-        version, url = artifact
-        path = urlparse(url).path.lower()
-        if not (path.endswith(".tar.gz") or path.endswith(".tgz")):
-            logger.warning("FlagTune model URL must reference a gzip tar archive: %s", url)
-            return None
-        destination = (_cache_root() / _model_relative_path(identity) / version / MODEL_ARCHIVE_NAME)
-        logger.info("Downloading FlagTune model for %s from %s", identity.artifact_key, url)
-        try:
-            from urllib.request import Request, urlopen
+        return self._download_artifact(identity, artifact)
 
-            request = Request(url, headers={"User-Agent": f"FlagTune/{_FLAGTUNE_VERSION}"})
-            with urlopen(request, timeout=120) as response:
+    def _download_artifact(self, identity: ModelIdentity, artifact: RemoteArtifact) -> Optional[Path]:
+        """Download one manifest artifact after HTTPS, digest, and archive checks."""
+        parsed = urlparse(artifact.url)
+        if parsed.scheme.lower() != "https" or not parsed.netloc:
+            logger.warning("FlagTune model URL must use HTTPS: %s", artifact.url)
+            return None
+        if not (parsed.path.lower().endswith(".tar.gz") or parsed.path.lower().endswith(".tgz")):
+            logger.warning("FlagTune model URL must reference a gzip tar archive: %s", artifact.url)
+            return None
+        destination = (
+            _cache_root()
+            / _model_relative_path(identity)
+            / artifact.version
+            / MODEL_ARCHIVE_NAME
+        )
+        logger.info("Downloading FlagTune model for %s from %s", identity.artifact_key, artifact.url)
+        try:
+            from urllib.request import Request
+
+            from triton.flagtune.runtime.model_sources import _open_https
+
+            request = Request(
+                artifact.url,
+                headers={"User-Agent": f"FlagTune/{_FLAGTUNE_VERSION}"},
+            )
+            with _open_https(request, timeout=120) as response:
                 payload = response.read()
-            read_model_archive_bytes(payload, source=url)
+            if hashlib.sha256(payload).hexdigest() != artifact.sha256:
+                logger.warning("FlagTune model SHA-256 mismatch for %s", artifact.url)
+                return None
+            members = read_model_archive_bytes(payload, source=artifact.url)
+            self._load_bundle_members(identity, artifact.version, members, destination)
+            if destination.is_file() and not destination.is_symlink():
+                try:
+                    self._load_bundle(identity, artifact.version, destination)
+                except Exception:
+                    logger.warning(
+                        "Replacing incompatible concurrently cached FlagTune model: %s",
+                        destination,
+                        exc_info=True,
+                    )
+                else:
+                    logger.warning("Keeping concurrently cached immutable FlagTune model: %s", destination)
+                    return destination
             _atomic_write_bytes(destination, payload)
             logger.info("FlagTune model cached to %s", destination)
             return destination
@@ -342,7 +509,7 @@ class FlagTuneModelManager:
             logger.warning(
                 "Failed to download model for %s from %s",
                 identity.artifact_key,
-                url,
+                artifact.url,
                 exc_info=True,
             )
             return None
