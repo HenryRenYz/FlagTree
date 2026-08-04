@@ -3,6 +3,7 @@ from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton._C.libtriton import tle
 from triton import knobs
 from triton.runtime.errors import PTXASError
+from triton.runtime._distributed import DistributedRtContext
 
 from dataclasses import dataclass
 import functools
@@ -139,6 +140,19 @@ class CUDAOptions:
         if not extern_libs.get('libdevice', None):
             extern_libs['libdevice'] = knobs.nvidia.libdevice_path or str(default_libdir / 'libdevice.10.bc')
 
+        # flagtree tle raw: libnvshmem_device when @dialect(library="nvshmem") enabled in utils.
+        try:
+            from triton.experimental.tle.raw.nvshmem.utils import (
+                is_nvshmem_device_bc_enabled,
+                resolve_nvshmem_device_bitcode,
+            )
+            if is_nvshmem_device_bc_enabled():
+                nvshmem_bc = resolve_nvshmem_device_bitcode(arch=self.arch)
+                if nvshmem_bc is not None:
+                    extern_libs.update({"libnvshmem_device": str(nvshmem_bc)})
+        except Exception:
+            pass
+
         # flagtree tle distributed: Add distributed bitcode library(libflagcx_device.bc) if distributed features are enabled.
         extern_libs.update(Distributed().get_extern_libs())
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
@@ -255,6 +269,10 @@ class CUDABackend(BaseBackend):
 
     @staticmethod
     def make_ttir(mod, metadata, opt, capability):
+        # flagtree tle raw
+        kernel_init_hooks = mod.get_operation().get_str_attr("tle.raw.kernel_init_hooks")
+        metadata["kernel_init_hooks"] = kernel_init_hooks.split(",") if kernel_init_hooks else []
+
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
@@ -279,6 +297,9 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
         emuTF32 = (capability // 10 >= 8)
+        # flagtree tle distributed
+        if DistributedRtContext().is_lite_mode:
+            tle.passes.add_params_for_distribution(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # flagtree tle raw
         tle.raw_passes.add_tle_convert_arg_to_memdesc(pm)
@@ -293,13 +314,20 @@ class CUDABackend(BaseBackend):
         # source-level chunk staging into direct async copies targeting
         # memdesc subviews of the final shared operand buffer.
         tle.passes.add_optimize_local_pointer_async_stores(pm)
+        # flagtree pass: fold an ordered join/transpose/reshape K concatenation
+        # into a single op before any layout is assigned, so the operand
+        # encodings are chosen as if the concatenation had always been one op.
+        # Left as a join chain the operand would be staged through shared memory
+        # instead of reaching the mma in registers.
+        if hasattr(passes.ttgpuir, "add_concat_dot_operand"):
+            passes.ttgpuir.add_concat_dot_operand(pm)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_process_shared_memory_hint(pm)  # flagtree hints
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
         nvidia.passes.ttnvgpuir.add_plan_cta(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm, knobs.nvidia.rlc_enhance)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         tle.passes.add_early_assign_memory_space(pm)
         # begin flagtree tle
@@ -310,7 +338,7 @@ class CUDABackend(BaseBackend):
         # end flagtree tle
         passes.ttgpuir.add_accelerate_matmul(pm)
         tle.passes.add_lower_wgmma(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm, knobs.nvidia.rlc_enhance)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         tle.passes.add_promote_local_store_staging(pm)
         nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
@@ -361,7 +389,7 @@ class CUDABackend(BaseBackend):
             tle.passes.add_lower_tma_copy(pm)
             tle.passes.add_schedule_tma_store_sync(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm, knobs.nvidia.rlc_enhance)
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -377,6 +405,11 @@ class CUDABackend(BaseBackend):
         passes.common.add_sccp(pm)
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
+        # flagtree pass: last chance to undo a concat the layouts did not end up
+        # supporting, so it runs after everything that can still fold or retag
+        # the operand.
+        if hasattr(passes.ttgpuir, "add_expand_concat_dot_operand"):
+            passes.ttgpuir.add_expand_concat_dot_operand(pm)
 
         pm.run(mod, 'make_ttgir')
         # begin flagtree tle
@@ -428,7 +461,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
-        # Materialize deferred tle_raw sources before inlining DSL regions.
+        # flagtree tle raw: Materialize deferred tle_raw sources before inlining DSL regions.
         from .deferred_raw import (
             finish_deferred_raw_materialize,
             deferred_raw_materialize,

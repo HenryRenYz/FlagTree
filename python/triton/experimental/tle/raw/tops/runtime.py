@@ -1,13 +1,34 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from __future__ import annotations
 import os
 import tempfile
 import subprocess
 from pathlib import Path
 from typing import Any, Final, List, Optional
-
+import hashlib
 from triton._C.libtriton import llvm
 from triton._C.libtriton.tle.llvm import parse_llvm_ir
 from triton.backends.enflame.gcu_intrinsics import rewrite_intrinsics_to_placeholders
+from triton.experimental.tle.raw.runtime import RawJITFunction
 
 
 def _find_tops_include_dir() -> str:
@@ -41,7 +62,7 @@ def _get_gcu_arch() -> str:
     return os.getenv("GCU_ARCH", "gcu400")
 
 
-class TOPSJITFunction(object):
+class TOPSJITFunction(RawJITFunction):
     """TLE-Raw dialect for TOPS C++ (.tops) files compiled via topscc.
 
     Usage:
@@ -52,20 +73,40 @@ class TOPSJITFunction(object):
 
     def __init__(self, fn: Any, file: Optional[Path] = None, arch: Optional[str] = None,
                  extra_flags: Optional[List[str]] = None, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.fn: Final[Any] = fn
+        super().__init__(fn, **kwargs)
         self.arch: Final[str] = arch or _get_gcu_arch()
         self.extra_flags: Final[List[str]] = extra_flags or []
         self.region_dialect: Final[str] = "tops"
         self.arg_dialect: Final[str] = "llvm"
-        self.__triton_builtin__: Final[bool] = True
+        self.extern_func_name: Final[Optional[str]] = kwargs.get("extern_func_name", None)
+        self.deferred: Final[bool] = kwargs.get("deferred", True)
 
         if file is not None:
-            self.code: Final[str] = Path(file).read_text()
-            self.filename: Final[str] = str(file)
+            if hasattr(file, "read_text") and not isinstance(file, Path):
+                file_name = getattr(file, "name", "<deferred>")
+            else:
+                file_name = str(file)
         else:
-            self.code: Final[str] = ""
-            self.filename: Final[str] = "<inline>"
+            file_name = "<inline>"
+        self.file_name: Final[str] = file_name
+
+        # Read the .tops source text so it can participate in cache key computation.
+        # This ensures that editing the .tops file invalidates the Triton compile cache.
+        if file is not None:
+            code = file.read_text() if hasattr(file, "read_text") else Path(file).read_text()
+        else:
+            code = ""
+        self.code: Final[str] = code
+
+    @property
+    def cache_key(self) -> str:
+        """Hash of the .tops source content + arch + extern_func_name.
+
+        Included in JITFunction.cache_key via DependenciesFinder so that
+        changes to the .tops file invalidate the compile cache.
+        """
+        payload = f"{self.region_dialect}\0{self.extern_func_name or ''}\0{self.arch}\0{self.code}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _detect_topscc_style(topscc: str) -> str:
@@ -173,14 +214,27 @@ class TOPSJITFunction(object):
             print("// ---- end ----")
         return result
 
-    def create_region_by_llvm(self, builder, llvm: str, handles, alias_indices, hint: str = ""):
-        return builder.create_tle_raw_region_by_llvm_func(
-            llvm,
+    def create_region_by_llvm(self, builder, llvm: str, handles, alias_indices, hint: str = "",
+                              extern_func_name: str = ""):
+        return super().create_region_by_llvm(builder, llvm, handles, alias_indices, hint, extern_func_name)
+
+    def register_pending_source(self, *, hint: str = "") -> str:
+        if not self.extern_func_name:
+            raise RuntimeError("enflame only support deferred tops tle_raw requires extern_func_name "
+                               "(the device function symbol in the .tops file)")
+        payload = f"{self.region_dialect}\0{self.extern_func_name or ''}\0{self.file_name}".encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    def create_region_deferred(self, builder, source_id: str, handles, alias_indices, hint: str = ""):
+        return builder.create_tle_raw_region_deferred(
+            source_id,
             self.region_dialect,
             self.arg_dialect,
             handles,
             alias_indices,
             hint,
+            self.file_name,
+            self.extern_func_name,
         )
 
     def make_llvm(self, mlir_context) -> str:

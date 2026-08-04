@@ -1,3 +1,23 @@
+# Copyright 2025-     FlagOS Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 # flagtree tle
 import builtins
 import triton.language.core as tl
@@ -12,6 +32,7 @@ from triton.language.core import (
     constexpr,
     tensor,
     range,
+    range as _tl_range,
 )
 
 # Address space 3 matches the shared-memory space used in TritonGPU lowering.
@@ -50,6 +71,28 @@ class pipeline(range):
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
         super().__init__(arg1, arg2, step, num_stages, loop_unroll_factor)
+
+
+class range(_tl_range):
+    """
+    FlagTree/TLE extension of :func:`triton.language.range`.
+
+    Behaves exactly like ``tl.range`` but adds the ``reorder`` hint, a TLE-specific
+    extension that is intentionally kept out of the upstream Triton primitive.
+
+    :param reorder: If ``True`` (and ``loop_unroll_factor`` is set), instructs the
+        FlagTree ``reorder-loop-loads`` optimization to cluster loads produced by the
+        unrolled loop body ahead of the remaining ops, improving memory-latency hiding.
+        Requires a FlagTree build with ``__FLAGTREE_REORDER_LOOP_LOADS__`` enabled.
+    :type reorder: bool
+    """
+
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False, disable_licm=False,
+                 reorder=False):
+        super().__init__(arg1, arg2, step, num_stages, loop_unroll_factor, disallow_acc_multi_buffer, flatten,
+                         warp_specialize, disable_licm)
+        self.reorder = reorder
 
 
 class WarpSpecializeCallerContext:
@@ -911,10 +954,16 @@ def copy(
 
         try:
             if direction == CopyDirection.GM_TO_LOCAL:
-                # None fills the FlagTree hints slot; TLE copy has no hints to pass.
-                load_extra_args = () if (mthreads_enabled or iluvatar_enabled) else (None, )
-                tt_load = _semantic.load(src, mask, other, boundary_check, padding_option, cache_modifier,
-                                         eviction_policy, volatile, *load_extra_args)
+                if iluvatar_enabled:
+                    # Iluvatar's semantic.load carries an extra `stride` (SME) slot
+                    # right after `other`; TLE copy never uses the SME path.
+                    tt_load = _semantic.load(src, mask, other, None, boundary_check, padding_option, cache_modifier,
+                                             eviction_policy, volatile)
+                else:
+                    # None fills the FlagTree hints slot; TLE copy has no hints to pass.
+                    load_extra_args = () if mthreads_enabled else (None, )
+                    tt_load = _semantic.load(src, mask, other, boundary_check, padding_option, cache_modifier,
+                                             eviction_policy, volatile, *load_extra_args)
                 local_ptrs = local_ptr(dst, _make_full_indices(dst, _semantic), _semantic=_semantic)
                 _semantic.store(local_ptrs, tt_load, mask, boundary_check, cache_modifier, eviction_policy)
             else:
