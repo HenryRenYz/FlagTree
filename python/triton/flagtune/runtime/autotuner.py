@@ -119,9 +119,8 @@ class Flagtuner(Autotuner):
     This subclass first executes Triton's normal ``prune_configs`` logic.  If
     ``op_id`` and ``variant`` are supplied and
     ``FLAGTUNE_ENABLE=1``, it lazily creates a FlagTune proposer and replaces
-    the pruned list with predicted candidates.  Initialization, prediction, or
-    config-conversion failures fall back to Triton's pruned configs and emit a
-    warning instead of breaking kernel execution.
+    the pruned list with predicted candidates. When explicitly enabled,
+    initialization, prediction, and config-conversion failures propagate.
 
     Args:
         fn: JIT kernel passed to :class:`triton.runtime.autotuner.Autotuner`.
@@ -214,7 +213,6 @@ class Flagtuner(Autotuner):
         self._flagtune_variant = variant
         self._flagtune_dtype_resolver = flagtune_dtype_resolver
         self._flagtune_models: Dict[Any, Any] = {}
-        self._flagtune_init_failed: set[Any] = set()
 
     def _runtime_identity(self, kwargs: Dict[str, Any]):
         """Build the trusted GPU/dtype identity for the current kernel call."""
@@ -233,7 +231,7 @@ class Flagtuner(Autotuner):
             raise ValueError("FlagTune dtype resolver returned no tensor dtypes")
         gpu = discover_gpu_metadata()
         return ModelIdentity(
-            str(gpu["gpu_key"]),
+            str(gpu["platform_key"]),
             self._flagtune_op_id,
             self._flagtune_variant,
             make_dtype_key(dtypes),
@@ -242,12 +240,10 @@ class Flagtuner(Autotuner):
     def _ensure_flagtune(self, identity):
         """Lazily initialize this tuner's proposer and variant metadata once.
 
-        Disabled or unnamed tuners remain retryable because enablement may not
-        have been consulted earlier.  Any registration/model/import failure is
-        logged, marks initialization permanently failed for this tuner, and
-        leaves normal Triton pruning active.
+        Disabled or unnamed tuners leave normal Triton pruning active. Enabled
+        initialization and model contract failures propagate to the caller.
         """
-        if identity in self._flagtune_models or identity in self._flagtune_init_failed:
+        if identity in self._flagtune_models:
             return self._flagtune_models.get(identity)
         if not self._flagtune_op_id or not self._flagtune_variant:
             return None
@@ -257,35 +253,25 @@ class Flagtuner(Autotuner):
         if not _is_enabled():
             return None
 
-        try:
-            from triton.flagtune.runtime.proposer import load_model_bundle, make_config_proposer
+        from triton.flagtune.runtime.proposer import load_model_bundle, make_config_proposer
 
-            loaded = load_model_bundle(
+        loaded = load_model_bundle(
+            identity.op_id,
+            identity.variant,
+            platform_key=identity.platform_key,
+            dtype_key=identity.dtype_key,
+        )
+        result = (
+            make_config_proposer(
                 identity.op_id,
                 identity.variant,
-                gpu_key=identity.gpu_key,
+                platform_key=identity.platform_key,
                 dtype_key=identity.dtype_key,
-            )
-            result = (
-                make_config_proposer(
-                    identity.op_id,
-                    identity.variant,
-                    gpu_key=identity.gpu_key,
-                    dtype_key=identity.dtype_key,
-                ),
-                loaded.variant,
-            )
-            self._flagtune_models[identity] = result
-            return result
-        except Exception as exc:
-            self._flagtune_init_failed.add(identity)
-            logger.warning(
-                "FlagTune init failed for %s/%s: %s",
-                self._flagtune_op_id,
-                self._flagtune_variant,
-                exc,
-            )
-            return None
+            ),
+            loaded.variant,
+        )
+        self._flagtune_models[identity] = result
+        return result
 
     def prune_configs(self, kwargs):
         """Return FlagTune candidates when available, otherwise Triton candidates.
@@ -296,15 +282,14 @@ class Flagtuner(Autotuner):
         stage restores the original pruned list.
         """
         pruned = super().prune_configs(kwargs)
+        if not self._flagtune_op_id or not self._flagtune_variant:
+            return pruned
+        from triton.flagtune import is_enabled as _is_enabled
 
-        try:
-            identity = self._runtime_identity(kwargs)
-        except Exception as exc:
-            logger.warning("FlagTune identity resolution failed: %s", exc)
+        if not _is_enabled():
             return pruned
+        identity = self._runtime_identity(kwargs)
         model = self._ensure_flagtune(identity)
-        if model is None:
-            return pruned
         proposer, variant_info = model
 
         param_fields = variant_info.param_names
@@ -312,33 +297,28 @@ class Flagtuner(Autotuner):
         meta = {
             "op_id": identity.op_id,
             "variant": identity.variant,
-            "gpu_key": identity.gpu_key,
+            "platform_key": identity.platform_key,
             "dtype_key": identity.dtype_key,
         }
 
-        try:
-            config_dicts = proposer(None, self.nargs, initial, meta)
-        except Exception as exc:
-            logger.warning("FlagTune propose failed: %s", exc)
-            return pruned
+        config_dicts = proposer(None, self.nargs, initial, meta)
 
         if not config_dicts:
-            return pruned
+            raise RuntimeError(f"FlagTune proposer returned no configs for {identity.artifact_key}")
 
         result = []
         for d in config_dicts:
-            try:
-                result.append(variant_info.to_config(d))
-            except Exception:
-                pass
+            result.append(variant_info.to_config(d))
 
         if not result:
-            return pruned
+            raise RuntimeError(f"FlagTune proposer produced no usable configs for {identity.artifact_key}")
 
         if self.early_config_prune:
             result = self.early_config_prune(result, self.nargs, **kwargs)
 
-        return result if result else pruned
+        if not result:
+            raise RuntimeError(f"FlagTune configs were all pruned for {identity.artifact_key}")
+        return result
 
 
 def flagtune(
@@ -387,8 +367,8 @@ def flagtune(
 
     Notes:
         This API is behavior-compatible with Triton's autotune decorator when
-        FlagTune is disabled, unnamed, unavailable, or unable to propose valid
-        configs. Model loading is lazy and requires no prior registration.
+        FlagTune is disabled or unnamed. Model loading is lazy and requires no
+        prior registration; enabled contract failures propagate.
     """
 
     def decorator(fn):

@@ -108,7 +108,7 @@ def load_model_bundle(
     op_id: str,
     variant: str,
     *,
-    gpu_key: str,
+    platform_key: str,
     dtype_key: str,
     model_version: Optional[str] = None,
 ) -> Any:
@@ -122,7 +122,7 @@ def load_model_bundle(
     return _get_model_manager().load(
         op_id,
         variant,
-        gpu_key=gpu_key,
+        platform_key=platform_key,
         dtype_key=dtype_key,
         model_version=model_version,
     )
@@ -132,7 +132,7 @@ def make_config_proposer(
     op_id: str,
     variant: str,
     *,
-    gpu_key: str,
+    platform_key: str,
     dtype_key: str,
     model_version: Optional[str] = None,
 ) -> ConfigProposer:
@@ -167,14 +167,14 @@ def make_config_proposer(
         integration. Candidate enumeration materializes the full
         parameter Cartesian product before prediction.
     """
-    identity = ModelIdentity(gpu_key, op_id, variant, dtype_key)
+    identity = ModelIdentity(platform_key, op_id, variant, dtype_key)
     if _disabled(identity):
         return lambda _fn, _shape, _initial, _meta: []
 
     loaded = load_model_bundle(
         op_id,
         variant,
-        gpu_key=gpu_key,
+        platform_key=platform_key,
         dtype_key=dtype_key,
         model_version=model_version,
     )

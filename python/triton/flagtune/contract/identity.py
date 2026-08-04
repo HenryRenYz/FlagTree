@@ -21,17 +21,17 @@
 # SOFTWARE.
 """Build safe, canonical identities for FlagTune model artifacts.
 
-Each archive is addressed by ``gpu_key/op_id/variant/dtype_key``.  The helpers
+Each archive is addressed by ``platform_key/op_id/variant/dtype_key``.  The helpers
 here normalize user- and runtime-derived values before they become path
 segments, URL-manifest keys, or fields embedded in ``flagtune_config.yaml``.
 Training/export code records the identity, while registry validation and the
 model manager require an exact match at load time.
 
-GPU keys contain vendor, normalized device name, and a backend-native
-architecture suffix.  NVIDIA uses values such as ``sm90`` while AMD uses values
-such as ``gfx942``.  Device detection and backend validation live in
-``triton.flagtune.runtime.device``; this module only canonicalizes already validated
-identity metadata.
+Platform keys contain only vendor and normalized product identity. Backend-native
+architecture values such as ``sm90`` and ``gfx942`` remain independent device
+metadata and never participate in model names, paths, or cache keys. Device
+detection and backend validation live in ``triton.flagtune.runtime.device``;
+this module canonicalizes the identity metadata they provide.
 """
 
 from __future__ import annotations
@@ -88,6 +88,11 @@ def validate_identity_segment(value: Any, location: str) -> str:
     if not _SAFE_SEGMENT.fullmatch(segment) or segment in (".", ".."):
         raise ModelIdentityError(f"{location} is not a safe identity segment: {value!r}")
     return segment
+
+
+def validate_platform_key(value: Any, location: str = "platform_key") -> str:
+    """Normalize and validate a platform identity."""
+    return validate_identity_segment(value, location)
 
 
 def validate_op_id(value: Any, location: str = "op_id") -> str:
@@ -149,39 +154,39 @@ def _normalize_vendor(value: str) -> str:
     return aliases.get(slug, slug)
 
 
-def make_gpu_key(vendor: str, device_name: str, architecture: str) -> str:
-    """Return the stable GPU component used to segregate model artifacts.
+_PLATFORM_DEVICE_ALIASES = {
+    ("nvidia", "h20-3e"): "h20",
+}
 
-    ``architecture`` must be a backend-native stable identifier.  Callers must
-    not reuse a model across different keys without independently establishing
-    compatibility.
-    """
+
+def make_platform_key(vendor: str, device_name: str) -> str:
+    """Return the stable vendor/product component used for model artifacts."""
     vendor_key = _normalize_vendor(vendor)
     device_key = normalize_device_name(device_name)
-    architecture_key = validate_identity_segment(architecture, "architecture")
-    return validate_identity_segment(f"{vendor_key}-{device_key}-{architecture_key}", "gpu_key")
+    device_key = _PLATFORM_DEVICE_ALIASES.get((vendor_key, device_key), device_key)
+    return validate_platform_key(f"{vendor_key}-{device_key}", "platform_key")
 
 
 @dataclass(frozen=True)
 class ModelIdentity:
-    gpu_key: str
+    platform_key: str
     op_id: str
     variant: str
     dtype_key: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "gpu_key", validate_identity_segment(self.gpu_key, "gpu_key"))
+        object.__setattr__(self, "platform_key", validate_platform_key(self.platform_key))
         object.__setattr__(self, "op_id", validate_op_id(self.op_id))
         object.__setattr__(self, "variant", validate_variant_name(self.variant))
         object.__setattr__(self, "dtype_key", validate_identity_segment(self.dtype_key, "dtype_key"))
 
     @property
     def artifact_key(self) -> str:
-        return f"{self.gpu_key}/{self.op_id}/{self.variant}/{self.dtype_key}"
+        return f"{self.platform_key}/{self.op_id}/{self.variant}/{self.dtype_key}"
 
 
-def artifact_key(gpu_key: str, op_id: str, variant: str, dtype_key: str) -> str:
-    return ModelIdentity(gpu_key, op_id, variant, dtype_key).artifact_key
+def artifact_key(platform_key: str, op_id: str, variant: str, dtype_key: str) -> str:
+    return ModelIdentity(platform_key, op_id, variant, dtype_key).artifact_key
 
 
 def gpu_metadata(
@@ -191,13 +196,13 @@ def gpu_metadata(
     device_name: str,
     architecture: str,
 ) -> Mapping[str, Any]:
-    """Return serializable GPU metadata plus the matching canonical ``gpu_key``."""
+    """Return serializable GPU metadata plus the matching canonical ``platform_key``."""
     return {
         "backend": validate_identity_segment(backend, "GPU backend"),
         "vendor": str(vendor),
         "device_name": str(device_name),
         "architecture": validate_identity_segment(architecture, "GPU architecture"),
-        "gpu_key": make_gpu_key(vendor, device_name, architecture),
+        "platform_key": make_platform_key(vendor, device_name),
     }
 
 

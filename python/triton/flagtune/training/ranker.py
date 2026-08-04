@@ -282,22 +282,30 @@ def _group_plan(
     group_sizes: List[int] = []
     skipped = 0
     sampled_out = 0
-    gpu_keys: set[str] = set()
+    platform_keys: set[str] = set()
+    architectures: set[str] = set()
     dtype_keys: set[str] = set()
     for _group_index, (_key, records) in enumerate(_group_records(path)):
         for line_number, record in records:
             model_identity = record.get("model_identity")
             dtypes = record.get("dtypes")
+            device = record.get("device")
+            metadata = device.get("metadata") if isinstance(device, Mapping) else None
+            architecture = metadata.get("architecture") if isinstance(metadata, Mapping) else None
+            if architecture is not None:
+                if not isinstance(architecture, str):
+                    raise TrainingDataError(f"benchmark data line {line_number} has invalid device architecture")
+                architectures.add(architecture)
             identity_fields = (
-                model_identity.get("gpu_key") if isinstance(model_identity, Mapping) else None,
+                model_identity.get("platform_key") if isinstance(model_identity, Mapping) else None,
                 model_identity.get("dtype_key") if isinstance(model_identity, Mapping) else None,
                 dtypes.get("inputs") if isinstance(dtypes, Mapping) else None,
                 dtypes.get("outputs") if isinstance(dtypes, Mapping) else None,
             )
             if any(value is not None for value in identity_fields):
-                gpu_key, dtype_key, input_dtypes, output_dtypes = identity_fields
-                if not isinstance(gpu_key, str) or not isinstance(dtype_key, str):
-                    raise TrainingDataError(f"benchmark data line {line_number} has incomplete GPU/dtype identity")
+                platform_key, dtype_key, input_dtypes, output_dtypes = identity_fields
+                if not isinstance(platform_key, str) or not isinstance(dtype_key, str):
+                    raise TrainingDataError(f"benchmark data line {line_number} has incomplete platform/dtype identity")
                 if not isinstance(input_dtypes, list) or not isinstance(output_dtypes, list):
                     raise TrainingDataError(f"benchmark data line {line_number} must contain dtype lists")
                 from triton.flagtune.contract.identity import make_dtype_key
@@ -309,7 +317,7 @@ def _group_plan(
                 if (not isinstance(ranking_group, Mapping) or ranking_group.get("model_dtype_key") != dtype_key):
                     raise TrainingDataError(f"benchmark data line {line_number} has inconsistent "
                                             "ranking_group.model_dtype_key")
-                gpu_keys.add(gpu_key)
+                platform_keys.add(platform_key)
                 dtype_keys.add(dtype_key)
         finite_count = sum(_finite_latency(record) is not None for _, record in records)
         skipped += len(records) - finite_count
@@ -322,8 +330,10 @@ def _group_plan(
             group_sizes.append(selected_count)
         else:
             skipped += selected_count
-    if len(gpu_keys) > 1:
-        raise TrainingDataError(f"benchmark data mixes GPU identities: {sorted(gpu_keys)}")
+    if len(platform_keys) > 1:
+        raise TrainingDataError(f"benchmark data mixes platform identities: {sorted(platform_keys)}")
+    if len(architectures) > 1:
+        raise TrainingDataError(f"benchmark data mixes device architectures: {sorted(architectures)}")
     if len(dtype_keys) > 1:
         raise TrainingDataError(f"benchmark data mixes dtype identities: {sorted(dtype_keys)}")
     return group_sizes, sum(group_sizes), skipped, sampled_out
@@ -619,12 +629,12 @@ def export_ranker_model(
     gpu: Mapping[str, Any],
     model_version: str,
 ) -> ExportedModel:
-    """Write one versioned, self-contained ``model.tar.gz`` archive.
+    """Write one self-contained ``model.tar.gz`` archive for package staging.
 
     Args:
         model: Fitted object exposing XGBoost's ``save_model`` method.
         variant: Compiled training definition used for features and legal configs.
-        output_root: Root under which the full identity/version path is derived.
+        output_root: Root under which the operator/variant/dtype path is derived.
         training_summary: JSON-serializable audit metadata from training.
 
     Returns:
@@ -632,8 +642,9 @@ def export_ranker_model(
 
     Outputs and pitfalls:
         The three required files exist only as archive members. The archive is
-        reproducible and atomically replaces an existing archive of the same
-        identity/version. The canonical config SHA-256 is stored inside the
+        reproducible and atomically replaces an existing archive at the same
+        staging path. Version identity remains in the child config and outer
+        platform package. The canonical config SHA-256 is stored inside the
         Booster and verified at load time.
     """
     try:
@@ -642,7 +653,8 @@ def export_ranker_model(
         raise ImportError("FlagTune model export requires PyYAML") from exc
 
     version = validate_model_version(model_version)
-    target = (Path(output_root).expanduser().resolve() / Path(*identity.artifact_key.split("/")) / version)
+    target = (Path(output_root).expanduser().resolve() / Path(*identity.op_id.split("/")) / identity.variant /
+              identity.dtype_key)
     target.mkdir(parents=True, exist_ok=True)
     config = variant_to_model_config(variant, identity, dtypes, gpu, version)
     config["flagtune_version_min"] = flagtune_version
@@ -652,6 +664,10 @@ def export_ranker_model(
     booster.set_attr(flagtune_config_sha256=config_digest)
     booster.feature_names = list(variant.feature_names)
     summary = dict(training_summary)
+    summary["op_id"] = variant.op_id
+    summary["variant"] = variant.name
+    summary["feature_cols"] = list(variant.feature_names)
+    summary["feature_count"] = len(variant.feature_names)
     summary["model_config_sha256"] = config_digest
     summary["model_version"] = version
     with tempfile.TemporaryDirectory(prefix="flagtune-export-") as temporary_dir:

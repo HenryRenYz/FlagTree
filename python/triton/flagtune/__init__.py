@@ -22,7 +22,7 @@
 """Self-contained model integration for FlagTune configuration prediction.
 
 Runtime callers identify a model bundle by
-``(gpu_key, op_id, variant, dtype_key)``. The bundle supplies
+``(platform_key, op_id, variant, dtype_key)``. The bundle supplies
 the parameter space, input rules, safe feature expressions, version metadata,
 and XGBoost model without prior operator registration::
 
@@ -31,7 +31,7 @@ and XGBoost model without prior operator registration::
     proposer = make_config_proposer(
         "flaggems/mm",
         "general_tma",
-        gpu_key="nvidia-h800-80gb-hbm3-sm90",
+        platform_key="nvidia-h800-80gb-hbm3",
         dtype_key="bf16-bf16-bf16",
     )
 """
@@ -63,7 +63,7 @@ def load_model_bundle(
     op_id: str,
     variant: str,
     *,
-    gpu_key: str,
+    platform_key: str,
     dtype_key: str,
     model_version=None,
 ):
@@ -78,7 +78,7 @@ def load_model_bundle(
     return _load(
         op_id,
         variant,
-        gpu_key=gpu_key,
+        platform_key=platform_key,
         dtype_key=dtype_key,
         model_version=model_version,
     )
@@ -88,7 +88,7 @@ def make_config_proposer(
     op_id: str,
     variant: str,
     *,
-    gpu_key: str,
+    platform_key: str,
     dtype_key: str,
     model_version=None,
 ) -> ConfigProposer:
@@ -103,7 +103,7 @@ def make_config_proposer(
     return _make(
         op_id,
         variant,
-        gpu_key=gpu_key,
+        platform_key=platform_key,
         dtype_key=dtype_key,
         model_version=model_version,
     )
