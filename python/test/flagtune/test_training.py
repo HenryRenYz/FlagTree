@@ -204,11 +204,12 @@ def _old_model_archive(
         "variant": variant,
     }
     archive_path = tmp_path / f"{variant}.tar.gz"
-    write_model_archive(archive_path, {
-        "xgboost_ranker.json": model_path.read_bytes(),
-        "flagtune_config.yaml": config_yaml,
-        "training_summary.json": json.dumps(summary, sort_keys=True).encode("utf-8"),
-    })
+    write_model_archive(
+        archive_path, {
+            "xgboost_ranker.json": model_path.read_bytes(),
+            "flagtune_config.yaml": config_yaml,
+            "training_summary.json": json.dumps(summary, sort_keys=True).encode("utf-8"),
+        })
     return archive_path, model_path.read_bytes(), old_config, model.predict(MIGRATION_MATRIX)
 
 
@@ -438,27 +439,19 @@ def test_migrate_model_archive_rejects_config_tampered_after_training(tmp_path):
         migrate_model_archive(archive_path.read_bytes(), platform_key="nvidia-h20", model_version="1.0.0")
 
 
-def test_migrate_model_archive_rejects_legacy_gpu_key_mismatching_h20_metadata(
-    tmp_path,
-):
+def test_migrate_model_archive_rejects_legacy_gpu_key_mismatching_h20_metadata(tmp_path, ):
     """Do not relabel an archive whose old identity contradicts its H20 metadata."""
     xgboost = pytest.importorskip("xgboost")
     yaml = pytest.importorskip("yaml")
-    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(
-        tmp_path
-    )
+    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(tmp_path)
     members = read_model_archive(archive_path)
     config = yaml.safe_load(members["flagtune_config.yaml"])
     config["gpu_key"] = "amd-mi300x-gfx942"
     config["gpu"]["gpu_key"] = "amd-mi300x-gfx942"
-    members["flagtune_config.yaml"] = yaml.safe_dump(
-        config, sort_keys=False
-    ).encode("utf-8")
+    members["flagtune_config.yaml"] = yaml.safe_dump(config, sort_keys=False).encode("utf-8")
     model = xgboost.XGBRanker()
     model.load_model(bytearray(members["xgboost_ranker.json"]))
-    model.get_booster().set_attr(
-        flagtune_config_sha256=model_config_sha256(config)
-    )
+    model.get_booster().set_attr(flagtune_config_sha256=model_config_sha256(config))
     model_path = tmp_path / "mismatched-identity.json"
     model.save_model(str(model_path))
     members["xgboost_ranker.json"] = model_path.read_bytes()
@@ -487,9 +480,7 @@ def test_migrate_model_archive_requires_sm90_architecture(tmp_path):
 def test_migrate_model_archive_rejects_booster_feature_order_mismatch(tmp_path):
     """Reject a Booster that cannot satisfy the migrated config feature contract."""
     xgboost = pytest.importorskip("xgboost")
-    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(
-        tmp_path
-    )
+    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(tmp_path)
     members = read_model_archive(archive_path)
     model = xgboost.XGBRanker()
     model.load_model(bytearray(members["xgboost_ranker.json"]))
@@ -509,15 +500,11 @@ def test_migrate_model_archive_rejects_booster_feature_order_mismatch(tmp_path):
 
 def test_migrate_model_archive_rejects_summary_feature_contract_mismatch(tmp_path):
     """Keep the migrated audit summary bound to the same ordered feature schema."""
-    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(
-        tmp_path
-    )
+    archive_path, _model_json, _old_config, _old_predictions = _old_model_archive(tmp_path)
     members = read_model_archive(archive_path)
     summary = json.loads(members["training_summary.json"])
     summary["feature_cols"] = list(reversed(MIGRATION_FEATURE_NAMES))
-    members["training_summary.json"] = json.dumps(
-        summary, sort_keys=True
-    ).encode("utf-8")
+    members["training_summary.json"] = json.dumps(summary, sort_keys=True).encode("utf-8")
     write_model_archive(archive_path, members)
 
     with pytest.raises(ModelArchiveError, match="summary feature_cols"):
@@ -531,10 +518,7 @@ def test_migrate_model_archive_rejects_summary_feature_contract_mismatch(tmp_pat
 def test_migrate_platform_package_writes_all_required_models(tmp_path):
     variants = ("gemv", "general_tma", "splitk")
     archives = [_old_model_archive(tmp_path, variant)[0] for variant in variants]
-    required = tuple(
-        ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32")
-        for variant in variants
-    )
+    required = tuple(ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32") for variant in variants)
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
 
     result = migrate_platform_package(
@@ -553,10 +537,7 @@ def test_migrate_platform_package_writes_all_required_models(tmp_path):
 def test_migrate_platform_package_rejects_missing_required_model(tmp_path):
     variants = ("gemv", "general_tma", "splitk")
     archives = [_old_model_archive(tmp_path, variant)[0] for variant in variants[:2]]
-    required = tuple(
-        ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32")
-        for variant in variants
-    )
+    required = tuple(ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32") for variant in variants)
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
 
     with pytest.raises(ModelArchiveError, match="missing required identities"):
@@ -573,10 +554,7 @@ def test_migrate_platform_package_rejects_missing_required_model(tmp_path):
 def test_migrate_platform_package_rejects_noncanonical_output_name(tmp_path):
     variants = ("gemv", "general_tma", "splitk")
     archives = [_old_model_archive(tmp_path, variant)[0] for variant in variants]
-    required = tuple(
-        ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32")
-        for variant in variants
-    )
+    required = tuple(ModelIdentity("nvidia-h20", "tests/train", variant, "bf16-bf16-f32") for variant in variants)
     output = tmp_path / "wrong-name.tar.gz"
 
     with pytest.raises(ModelArchiveError, match="package filename"):
@@ -600,16 +578,18 @@ def test_migration_cli_writes_complete_h20_package(tmp_path, capsys, manifest_st
             op_id="flaggems/mm",
             dtype_key="bf16-bf16-bf16",
             dtypes=("bfloat16", "bfloat16", "bfloat16"),
-        )[0]
-        for variant in variants
+        )[0] for variant in variants
     ]
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
     manifest_output = tmp_path / "flagtune-manifest.json"
     package_url = "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz"
     arguments = [
-        "--platform-key", "nvidia-h20",
-        "--model-version", "1.0.0",
-        "--output", str(output),
+        "--platform-key",
+        "nvidia-h20",
+        "--model-version",
+        "1.0.0",
+        "--output",
+        str(output),
     ]
     publish_manifest = manifest_state != "disabled"
     if manifest_state == "empty":
@@ -621,8 +601,10 @@ def test_migration_cli_writes_complete_h20_package(tmp_path, capsys, manifest_st
         )
     if publish_manifest:
         arguments.extend((
-            "--manifest-output", str(manifest_output),
-            "--package-url", package_url,
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            package_url,
         ))
     for archive in archives:
         arguments.extend(("--model", str(archive)))
@@ -668,11 +650,16 @@ def test_migration_cli_requires_manifest_arguments_together(
 ):
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
     arguments = [
-        "--platform-key", "nvidia-h20",
-        "--model-version", "1.0.0",
-        "--output", str(output),
-        "--model", str(tmp_path / "does-not-exist.tar.gz"),
-        publishing_argument[0], str(tmp_path / publishing_argument[1]),
+        "--platform-key",
+        "nvidia-h20",
+        "--model-version",
+        "1.0.0",
+        "--output",
+        str(output),
+        "--model",
+        str(tmp_path / "does-not-exist.tar.gz"),
+        publishing_argument[0],
+        str(tmp_path / publishing_argument[1]),
     ]
 
     with pytest.raises(SystemExit) as exc_info:
@@ -689,12 +676,18 @@ def test_migration_cli_rejects_noncanonical_package_url_before_migration(tmp_pat
 
     with pytest.raises(ModelArchiveError, match="package URL must use HTTPS and end with"):
         migration.main([
-            "--platform-key", "nvidia-h20",
-            "--model-version", "1.0.0",
-            "--output", str(output),
-            "--model", str(tmp_path / "does-not-exist.tar.gz"),
-            "--manifest-output", str(manifest_output),
-            "--package-url", "http://models.example.com/flagtune/wrong-name.tar.gz",
+            "--platform-key",
+            "nvidia-h20",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(output),
+            "--model",
+            str(tmp_path / "does-not-exist.tar.gz"),
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            "http://models.example.com/flagtune/wrong-name.tar.gz",
         ])
 
     assert not output.exists()
@@ -708,12 +701,18 @@ def test_migration_cli_rejects_existing_nonempty_manifest_before_migration(tmp_p
 
     with pytest.raises(ModelArchiveError, match="Manifest output already exists and is not empty"):
         migration.main([
-            "--platform-key", "nvidia-h20",
-            "--model-version", "1.0.0",
-            "--output", str(output),
-            "--model", str(tmp_path / "does-not-exist.tar.gz"),
-            "--manifest-output", str(manifest_output),
-            "--package-url", "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
+            "--platform-key",
+            "nvidia-h20",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(output),
+            "--model",
+            str(tmp_path / "does-not-exist.tar.gz"),
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
         ])
 
     assert not output.exists()
@@ -734,12 +733,18 @@ def test_migration_cli_rejects_placeholder_with_noninteger_schema_version(
 
     with pytest.raises(ModelArchiveError, match="Manifest output already exists and is not empty"):
         migration.main([
-            "--platform-key", "nvidia-h20",
-            "--model-version", "1.0.0",
-            "--output", str(output),
-            "--model", str(tmp_path / "does-not-exist.tar.gz"),
-            "--manifest-output", str(manifest_output),
-            "--package-url", "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
+            "--platform-key",
+            "nvidia-h20",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(output),
+            "--model",
+            str(tmp_path / "does-not-exist.tar.gz"),
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
         ])
 
     assert not output.exists()
@@ -779,12 +784,18 @@ def test_migration_cli_preserves_manifest_changed_during_migration(
 
     with pytest.raises(ModelArchiveError, match="Manifest output changed during publishing"):
         migration.main([
-            "--platform-key", "nvidia-h20",
-            "--model-version", "1.0.0",
-            "--output", str(output),
-            "--model", str(tmp_path / "legacy-model.tar.gz"),
-            "--manifest-output", str(manifest_output),
-            "--package-url", "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
+            "--platform-key",
+            "nvidia-h20",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(output),
+            "--model",
+            str(tmp_path / "legacy-model.tar.gz"),
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
         ])
 
     assert manifest_output.read_text(encoding="utf-8") == unrelated_manifest
@@ -821,12 +832,18 @@ def test_migration_cli_preserves_manifest_created_at_publication_boundary(
 
     with pytest.raises(ModelArchiveError, match="Manifest output changed during publishing"):
         migration.main([
-            "--platform-key", "nvidia-h20",
-            "--model-version", "1.0.0",
-            "--output", str(output),
-            "--model", str(tmp_path / "legacy-model.tar.gz"),
-            "--manifest-output", str(manifest_output),
-            "--package-url", "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
+            "--platform-key",
+            "nvidia-h20",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(output),
+            "--model",
+            str(tmp_path / "legacy-model.tar.gz"),
+            "--manifest-output",
+            str(manifest_output),
+            "--package-url",
+            "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
         ])
 
     assert manifest_output.read_bytes() == unrelated_manifest
@@ -857,12 +874,18 @@ def test_migration_cli_reuses_sidecar_lock_left_by_terminated_process(
     monkeypatch.setattr(migration, "migrate_platform_package", migrate_without_models)
 
     assert migration.main([
-        "--platform-key", "nvidia-h20",
-        "--model-version", "1.0.0",
-        "--output", str(output),
-        "--model", str(tmp_path / "legacy-model.tar.gz"),
-        "--manifest-output", str(manifest_output),
-        "--package-url", "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
+        "--platform-key",
+        "nvidia-h20",
+        "--model-version",
+        "1.0.0",
+        "--output",
+        str(output),
+        "--model",
+        str(tmp_path / "legacy-model.tar.gz"),
+        "--manifest-output",
+        str(manifest_output),
+        "--package-url",
+        "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz",
     ]) == 0
 
     assert lock_path.is_file()
@@ -872,10 +895,14 @@ def test_migration_cli_reuses_sidecar_lock_left_by_terminated_process(
 def test_migration_cli_rejects_non_h20_platform_before_reading_models(tmp_path):
     with pytest.raises(ModelArchiveError, match="only supports platform 'nvidia-h20'"):
         migration.main([
-            "--platform-key", "amd-mi300x",
-            "--model-version", "1.0.0",
-            "--output", str(tmp_path / "amd-mi300x_v1.0.0.tar.gz"),
-            "--model", str(tmp_path / "does-not-exist.tar.gz"),
+            "--platform-key",
+            "amd-mi300x",
+            "--model-version",
+            "1.0.0",
+            "--output",
+            str(tmp_path / "amd-mi300x_v1.0.0.tar.gz"),
+            "--model",
+            str(tmp_path / "does-not-exist.tar.gz"),
         ])
 
 

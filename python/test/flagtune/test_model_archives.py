@@ -98,20 +98,22 @@ def _platform_model_archive(tmp_path, variant, version="1.0.0", marker=b""):
         "features": ["M"],
     }
     path = tmp_path / f"{variant}-{version}.tar.gz"
-    write_model_archive(path, {
-        "xgboost_ranker.json": variant.encode() + marker,
-        "flagtune_config.yaml": yaml.safe_dump(config, sort_keys=True).encode(),
-        "training_summary.json": json.dumps(
-            {
+    write_model_archive(
+        path, {
+            "xgboost_ranker.json":
+            variant.encode() + marker,
+            "flagtune_config.yaml":
+            yaml.safe_dump(config, sort_keys=True).encode(),
+            "training_summary.json":
+            json.dumps({
                 "feature_cols": ["M"],
                 "feature_count": 1,
                 "model_config_sha256": model_config_sha256(config),
                 "model_version": version,
                 "op_id": "flaggems/mm",
                 "variant": variant,
-            }
-        ).encode(),
-    })
+            }).encode(),
+        })
     return identity, path
 
 
@@ -134,9 +136,12 @@ def _raw_platform_package(manifest, entries=()):
 def _install_platform_package(root, version="1.0.0", *, cache=False, marker=b""):
     children = root / f"children-{version}-{marker.hex()}"
     children.mkdir(parents=True, exist_ok=True)
-    archives = dict(_platform_model_archive(children, variant, version, marker) for variant in (
-        "gemv", "general_tma", "splitk",
-    ))
+    archives = dict(
+        _platform_model_archive(children, variant, version, marker) for variant in (
+            "gemv",
+            "general_tma",
+            "splitk",
+        ))
     filename = platform_package_name("nvidia-h20", version)
     path = root / "packages" / "nvidia-h20" / version / filename if cache else root / filename
     return write_platform_package(
@@ -169,19 +174,21 @@ def _configure_platform_remote(monkeypatch, version, payload, *, skip_runtime_va
     filename = platform_package_name("nvidia-h20", version)
     monkeypatch.delenv("FLAGTUNE_MODEL_DIR", raising=False)
     monkeypatch.delenv("FLAGTUNE_DISABLE_REMOTE", raising=False)
-    monkeypatch.setenv("FLAGTUNE_MODEL_URLS", json.dumps({
-        "schema_version": 1,
-        "packages": {
-            "nvidia-h20": {
-                "versions": {
-                    version: {
-                        "url": f"https://example.invalid/{filename}",
-                        "sha256": hashlib.sha256(payload).hexdigest(),
+    monkeypatch.setenv(
+        "FLAGTUNE_MODEL_URLS",
+        json.dumps({
+            "schema_version": 1,
+            "packages": {
+                "nvidia-h20": {
+                    "versions": {
+                        version: {
+                            "url": f"https://example.invalid/{filename}",
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        },
                     },
                 },
             },
-        },
-    }))
+        }))
     monkeypatch.setattr(model_sources, "_open_https", urlopen)
     if skip_runtime_validation:
         monkeypatch.setattr(
@@ -220,18 +227,20 @@ def _configure_remote(monkeypatch, version, payload):
 
     monkeypatch.delenv("FLAGTUNE_MODEL_DIR", raising=False)
     monkeypatch.delenv("FLAGTUNE_DISABLE_REMOTE", raising=False)
-    monkeypatch.setenv("FLAGTUNE_MODEL_URLS", json.dumps({
-        "models": {
-            "/".join(IDENTITY_PATH): {
-                "versions": {
-                    version: {
-                        "url": "https://example.invalid/model.tar.gz",
-                        "sha256": hashlib.sha256(payload).hexdigest(),
+    monkeypatch.setenv(
+        "FLAGTUNE_MODEL_URLS",
+        json.dumps({
+            "models": {
+                "/".join(IDENTITY_PATH): {
+                    "versions": {
+                        version: {
+                            "url": "https://example.invalid/model.tar.gz",
+                            "sha256": hashlib.sha256(payload).hexdigest(),
+                        },
                     },
                 },
             },
-        },
-    }))
+        }))
     monkeypatch.setattr(model_sources, "_open_https", urlopen)
     monkeypatch.setattr(FlagTuneModelManager, "_load_bundle_members", lambda *_args, **_kwargs: None)
     return requests
@@ -359,10 +368,9 @@ def test_platform_package_is_deterministic_and_indexes_literal_model_paths(tmp_p
         "schema_version": 1,
         "platform_key": "nvidia-h20",
         "package_version": "1.0.0",
-        "models": {
-            f"nvidia-h20/{path.removesuffix('/model.tar.gz')}": {"path": path}
-            for path in sorted(expected_paths)
-        },
+        "models":
+        {f"nvidia-h20/{path.removesuffix('/model.tar.gz')}": {"path": path}
+         for path in sorted(expected_paths)},
     }
 
     package = read_platform_package(
@@ -469,7 +477,10 @@ def test_platform_package_rejects_duplicate_model_paths():
     ],
 )
 def test_platform_package_rejects_wrong_platform_or_version(
-    manifest_update, expected_platform, expected_version, message,
+    manifest_update,
+    expected_platform,
+    expected_version,
+    message,
 ):
     manifest = _platform_manifest()
     manifest.update(manifest_update)
@@ -555,7 +566,10 @@ def test_platform_package_rejects_wrong_child_identity_or_version(tmp_path, conf
     ],
 )
 def test_platform_package_rejects_child_config_outside_full_contract(
-    tmp_path, validation_mode, config_update, message,
+    tmp_path,
+    validation_mode,
+    config_update,
+    message,
 ):
     identity, child = _platform_model_archive(tmp_path, "gemv")
     members = read_model_archive(child)
@@ -640,7 +654,10 @@ def test_user_flat_platform_package_precedes_cache_and_remote(tmp_path, monkeypa
     )
 
     selected = FlagTuneModelManager().resolve(
-        "flaggems/mm", "gemv", platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
+        "flaggems/mm",
+        "gemv",
+        platform_key="nvidia-h20",
+        dtype_key="bf16-bf16-bf16",
     )
 
     assert selected == user
@@ -654,7 +671,10 @@ def test_old_nested_single_model_layout_is_ignored(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         FlagTuneModelManager().resolve(
-            "flaggems/mm", "gemv", platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
+            "flaggems/mm",
+            "gemv",
+            platform_key="nvidia-h20",
+            dtype_key="bf16-bf16-bf16",
         )
 
 
@@ -668,7 +688,10 @@ def test_platform_package_cache_uses_canonical_path_and_exact_pin(tmp_path, monk
     manager = FlagTuneModelManager()
 
     assert manager.resolve(
-        "flaggems/mm", "general_tma", platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
+        "flaggems/mm",
+        "general_tma",
+        platform_key="nvidia-h20",
+        dtype_key="bf16-bf16-bf16",
     ) == latest
     assert manager.resolve(
         "flaggems/mm",
@@ -677,9 +700,7 @@ def test_platform_package_cache_uses_canonical_path_and_exact_pin(tmp_path, monk
         dtype_key="bf16-bf16-bf16",
         model_version="1.0.0",
     ) == first
-    assert latest == (
-        cache_root / "packages" / "nvidia-h20" / "2.0.0" / "nvidia-h20_v2.0.0.tar.gz"
-    )
+    assert latest == (cache_root / "packages" / "nvidia-h20" / "2.0.0" / "nvidia-h20_v2.0.0.tar.gz")
 
 
 def test_one_remote_platform_download_serves_all_variants(tmp_path, monkeypatch):
@@ -691,9 +712,11 @@ def test_one_remote_platform_download_serves_all_variants(tmp_path, monkeypatch)
 
     selected = [
         manager.resolve(
-            "flaggems/mm", variant, platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
-        )
-        for variant in ("gemv", "general_tma", "splitk")
+            "flaggems/mm",
+            variant,
+            platform_key="nvidia-h20",
+            dtype_key="bf16-bf16-bf16",
+        ) for variant in ("gemv", "general_tma", "splitk")
     ]
 
     expected = cache_root / "packages" / "nvidia-h20" / "1.0.0" / "nvidia-h20_v1.0.0.tar.gz"
@@ -703,9 +726,7 @@ def test_one_remote_platform_download_serves_all_variants(tmp_path, monkeypatch)
     assert not list(cache_root.rglob("*.tmp"))
 
 
-def test_remote_h20_package_requires_all_three_models_before_cache(
-    tmp_path, monkeypatch, caplog
-):
+def test_remote_h20_package_requires_all_three_models_before_cache(tmp_path, monkeypatch, caplog):
     children = tmp_path / "children"
     children.mkdir()
     identity, child = _platform_model_archive(children, "gemv")
@@ -715,15 +736,11 @@ def test_remote_h20_package_requires_all_three_models_before_cache(
         package_version="1.0.0",
         model_archives={identity: child},
     )
-    _configure_platform_remote(
-        monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False
-    )
+    _configure_platform_remote(monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False)
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
 
-    with caplog.at_level("WARNING"), pytest.raises(
-        IncompatibleModelError, match="missing required H20 models"
-    ):
+    with caplog.at_level("WARNING"), pytest.raises(IncompatibleModelError, match="missing required H20 models"):
         FlagTuneModelManager()._download_package(
             "nvidia-h20",
             model_sources.RemotePackage(
@@ -749,11 +766,7 @@ def test_remote_package_validates_unselected_child_before_cache(tmp_path, monkey
         config = yaml.safe_load(members["flagtune_config.yaml"])
         booster = model.get_booster()
         booster.feature_names = ["M"]
-        booster.set_attr(
-            flagtune_config_sha256=(
-                "0" * 64 if variant == "splitk" else model_config_sha256(config)
-            )
-        )
+        booster.set_attr(flagtune_config_sha256=("0" * 64 if variant == "splitk" else model_config_sha256(config)))
         loose = children / f"{variant}.json"
         model.save_model(str(loose))
         write_model_archive(
@@ -768,9 +781,7 @@ def test_remote_package_validates_unselected_child_before_cache(tmp_path, monkey
         model_archives=archives,
         required_identities=tuple(archives),
     )
-    _configure_platform_remote(
-        monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False
-    )
+    _configure_platform_remote(monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False)
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
 
@@ -785,9 +796,7 @@ def test_remote_package_validates_unselected_child_before_cache(tmp_path, monkey
     assert not list(cache_root.rglob("nvidia-h20_v1.0.0.tar.gz"))
 
 
-def test_remote_package_rejects_malformed_training_summary_before_cache(
-    tmp_path, monkeypatch, caplog
-):
+def test_remote_package_rejects_malformed_training_summary_before_cache(tmp_path, monkeypatch, caplog):
     children = tmp_path / "children"
     children.mkdir()
     archives = {}
@@ -807,15 +816,11 @@ def test_remote_package_rejects_malformed_training_summary_before_cache(
         model_archives=archives,
         required_identities=tuple(archives),
     )
-    _configure_platform_remote(
-        monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False
-    )
+    _configure_platform_remote(monkeypatch, "1.0.0", remote.read_bytes(), skip_runtime_validation=False)
     monkeypatch.setattr(model_loader, "_XGBoostPredictorCompat", lambda *_args: object())
     monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path / "cache"))
 
-    with caplog.at_level("WARNING"), pytest.raises(
-        IncompatibleModelError, match="training summary"
-    ):
+    with caplog.at_level("WARNING"), pytest.raises(IncompatibleModelError, match="training summary"):
         FlagTuneModelManager()._download_package(
             "nvidia-h20",
             model_sources.RemotePackage(
@@ -828,9 +833,7 @@ def test_remote_package_rejects_malformed_training_summary_before_cache(
     assert not list((tmp_path / "cache").rglob("nvidia-h20_v1.0.0.tar.gz"))
 
 
-def test_concurrent_package_publication_never_overwrites_race_winner(
-    tmp_path, monkeypatch
-):
+def test_concurrent_package_publication_never_overwrites_race_winner(tmp_path, monkeypatch):
     remote = _install_platform_package(tmp_path / "remote", "1.0.0", marker=b"remote")
     remote_payload = remote.read_bytes()
     rival = _install_platform_package(tmp_path / "rival", "1.0.0", marker=b"rival")
@@ -838,13 +841,7 @@ def test_concurrent_package_publication_never_overwrites_race_winner(
     _configure_platform_remote(monkeypatch, "1.0.0", remote_payload)
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
-    destination = (
-        cache_root
-        / "packages"
-        / "nvidia-h20"
-        / "1.0.0"
-        / "nvidia-h20_v1.0.0.tar.gz"
-    )
+    destination = (cache_root / "packages" / "nvidia-h20" / "1.0.0" / "nvidia-h20_v1.0.0.tar.gz")
 
     def racing_link(_source, target):
         Path(target).write_bytes(rival_payload)
@@ -877,7 +874,10 @@ def test_refresh_rejects_changed_digest_for_immutable_package_version(tmp_path, 
 
     with pytest.raises(IncompatibleModelError, match="immutable"):
         FlagTuneModelManager().resolve(
-            "flaggems/mm", "splitk", platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
+            "flaggems/mm",
+            "splitk",
+            platform_key="nvidia-h20",
+            dtype_key="bf16-bf16-bf16",
         )
 
     assert cached.read_bytes() != remote.read_bytes()
@@ -909,14 +909,15 @@ def test_three_model_loads_reuse_one_parsed_platform_package(tmp_path, monkeypat
 
     loaded = [
         manager.load(
-            "flaggems/mm", variant, platform_key="nvidia-h20", dtype_key="bf16-bf16-bf16",
-        )
-        for variant in ("gemv", "general_tma", "splitk")
+            "flaggems/mm",
+            variant,
+            platform_key="nvidia-h20",
+            dtype_key="bf16-bf16-bf16",
+        ) for variant in ("gemv", "general_tma", "splitk")
     ]
 
     assert [item.package_path for item in loaded] == [package_path] * 3
     assert [item.model_member for item in loaded] == [
-        f"flaggems/mm/{variant}/bf16-bf16-bf16/model.tar.gz"
-        for variant in ("gemv", "general_tma", "splitk")
+        f"flaggems/mm/{variant}/bf16-bf16-bf16/model.tar.gz" for variant in ("gemv", "general_tma", "splitk")
     ]
     assert parsed == [package_path]

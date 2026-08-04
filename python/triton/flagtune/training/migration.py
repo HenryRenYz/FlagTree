@@ -112,9 +112,7 @@ def _migrate_config(config: Mapping[str, Any], platform_key: str, model_version:
     if "platform_key" in migrated or "gpu_key" not in migrated:
         raise ModelArchiveError("legacy model config must contain gpu_key and no platform_key")
     try:
-        legacy_gpu_key = validate_identity_segment(
-            migrated.pop("gpu_key"), "legacy model config.gpu_key"
-        )
+        legacy_gpu_key = validate_identity_segment(migrated.pop("gpu_key"), "legacy model config.gpu_key")
     except (TypeError, ValueError) as exc:
         raise ModelArchiveError(f"invalid legacy gpu_key: {exc}") from exc
 
@@ -125,35 +123,22 @@ def _migrate_config(config: Mapping[str, Any], platform_key: str, model_version:
     if "platform_key" in migrated_gpu or "gpu_key" not in migrated_gpu:
         raise ModelArchiveError("legacy model config.gpu must contain gpu_key and no platform_key")
     try:
-        nested_legacy_gpu_key = validate_identity_segment(
-            migrated_gpu.pop("gpu_key"), "legacy model config.gpu.gpu_key"
-        )
+        nested_legacy_gpu_key = validate_identity_segment(migrated_gpu.pop("gpu_key"),
+                                                          "legacy model config.gpu.gpu_key")
         derived_platform = make_platform_key(str(migrated_gpu["vendor"]), str(migrated_gpu["device_name"]))
-        architecture = validate_identity_segment(
-            migrated_gpu["architecture"], "legacy model config.gpu.architecture"
-        )
+        architecture = validate_identity_segment(migrated_gpu["architecture"], "legacy model config.gpu.architecture")
     except (KeyError, TypeError, ValueError) as exc:
         raise ModelArchiveError(f"cannot derive platform from legacy GPU metadata: {exc}") from exc
     if architecture != "sm90":
-        raise ModelArchiveError(
-            f"legacy H20 migration requires architecture 'sm90', got {architecture!r}"
-        )
-    expected_legacy_gpu_key = validate_identity_segment(
-        f"{derived_platform}-{architecture}", "legacy gpu_key"
-    )
+        raise ModelArchiveError(f"legacy H20 migration requires architecture 'sm90', got {architecture!r}")
+    expected_legacy_gpu_key = validate_identity_segment(f"{derived_platform}-{architecture}", "legacy gpu_key")
     if legacy_gpu_key != nested_legacy_gpu_key:
-        raise ModelArchiveError(
-            "legacy gpu_key mismatch between model config root and GPU metadata"
-        )
+        raise ModelArchiveError("legacy gpu_key mismatch between model config root and GPU metadata")
     if legacy_gpu_key != expected_legacy_gpu_key:
-        raise ModelArchiveError(
-            f"legacy gpu_key {legacy_gpu_key!r} does not match GPU metadata "
-            f"{expected_legacy_gpu_key!r}"
-        )
+        raise ModelArchiveError(f"legacy gpu_key {legacy_gpu_key!r} does not match GPU metadata "
+                                f"{expected_legacy_gpu_key!r}")
     if derived_platform != platform_key:
-        raise ModelArchiveError(
-            f"legacy GPU metadata platform mismatch: {derived_platform!r} != {platform_key!r}"
-        )
+        raise ModelArchiveError(f"legacy GPU metadata platform mismatch: {derived_platform!r} != {platform_key!r}")
 
     migrated["model_version"] = model_version
     migrated["platform_key"] = platform_key
@@ -175,37 +160,23 @@ def _validate_legacy_summary(
 ) -> None:
     expected_features = list(feature_names)
     if summary.get("feature_cols") != expected_features:
-        raise ModelArchiveError(
-            "legacy training summary feature_cols do not match model config"
-        )
+        raise ModelArchiveError("legacy training summary feature_cols do not match model config")
     if "feature_count" in summary and summary["feature_count"] != len(expected_features):
-        raise ModelArchiveError(
-            "legacy training summary feature_count does not match model config"
-        )
+        raise ModelArchiveError("legacy training summary feature_count does not match model config")
     for field in ("op_id", "variant", "model_version"):
         if field in summary and summary[field] != config.get(field):
-            raise ModelArchiveError(
-                f"legacy training summary {field} does not match model config"
-            )
+            raise ModelArchiveError(f"legacy training summary {field} does not match model config")
     if summary.get("model_config_sha256") != legacy_digest:
-        raise ModelArchiveError(
-            "legacy training summary config digest does not match model config"
-        )
+        raise ModelArchiveError("legacy training summary config digest does not match model config")
     legacy_gpu_key = config.get("gpu_key")
     if "gpu_key" in summary and summary["gpu_key"] != legacy_gpu_key:
-        raise ModelArchiveError(
-            "legacy training summary gpu_key does not match model config"
-        )
+        raise ModelArchiveError("legacy training summary gpu_key does not match model config")
     summary_identity = summary.get("model_identity")
     if isinstance(summary_identity, Mapping):
         if summary_identity.get("gpu_key") != legacy_gpu_key:
-            raise ModelArchiveError(
-                "legacy training summary model_identity.gpu_key does not match model config"
-            )
+            raise ModelArchiveError("legacy training summary model_identity.gpu_key does not match model config")
         if summary_identity.get("dtype_key") != config.get("dtype_key"):
-            raise ModelArchiveError(
-                "legacy training summary model_identity.dtype_key does not match model config"
-            )
+            raise ModelArchiveError("legacy training summary model_identity.dtype_key does not match model config")
 
 
 def migrate_model_archive(
@@ -252,19 +223,13 @@ def migrate_model_archive(
             booster = model.get_booster()
             stored_digest = booster.attr("flagtune_config_sha256")
             if stored_digest != legacy_digest:
-                raise ModelArchiveError(
-                    f"legacy model config digest mismatch: {stored_digest!r} != {legacy_digest!r}"
-                )
+                raise ModelArchiveError(f"legacy model config digest mismatch: {stored_digest!r} != {legacy_digest!r}")
             stored_features = list(booster.feature_names or [])
             expected_features = list(variant.feature_names)
             if stored_features and stored_features != expected_features:
-                raise ModelArchiveError(
-                    "legacy XGBoost feature order does not match model config"
-                )
+                raise ModelArchiveError("legacy XGBoost feature order does not match model config")
             if int(booster.num_features()) != len(expected_features):
-                raise ModelArchiveError(
-                    "legacy XGBoost feature count does not match model config"
-                )
+                raise ModelArchiveError("legacy XGBoost feature count does not match model config")
             _validate_legacy_summary(
                 legacy_summary,
                 config=legacy_config,
@@ -306,9 +271,7 @@ def migrate_platform_package(
     output = Path(output_path)
     expected_name = platform_package_name(platform, version)
     if output.name != expected_name:
-        raise ModelArchiveError(
-            f"platform package filename must be {expected_name!r}, got {output.name!r}"
-        )
+        raise ModelArchiveError(f"platform package filename must be {expected_name!r}, got {output.name!r}")
     required = set(required_identities)
     with tempfile.TemporaryDirectory(prefix="flagtune-migrate-package-") as temporary_dir:
         temporary = Path(temporary_dir)
@@ -330,13 +293,11 @@ def migrate_platform_package(
         missing = sorted(required - actual, key=lambda item: item.artifact_key)
         if missing:
             raise ModelArchiveError(
-                f"platform package is missing required identities: {[item.artifact_key for item in missing]}"
-            )
+                f"platform package is missing required identities: {[item.artifact_key for item in missing]}")
         unexpected = sorted(actual - required, key=lambda item: item.artifact_key)
         if unexpected:
             raise ModelArchiveError(
-                f"platform package has unexpected identities: {[item.artifact_key for item in unexpected]}"
-            )
+                f"platform package has unexpected identities: {[item.artifact_key for item in unexpected]}")
         return write_platform_package(
             output,
             platform_key=platform,
@@ -351,12 +312,10 @@ def _required_h20_identities(platform_key: str) -> tuple[ModelIdentity, ...]:
     requested_platform = validate_identity_segment(platform_key, "platform_key")
     if requested_platform != h20_platform:
         raise ModelArchiveError(
-            f"legacy H20 migration only supports platform {h20_platform!r}, got {requested_platform!r}"
-        )
+            f"legacy H20 migration only supports platform {h20_platform!r}, got {requested_platform!r}")
     return tuple(
         ModelIdentity(h20_platform, "flaggems/mm", variant, "bf16-bf16-bf16")
-        for variant in ("gemv", "general_tma", "splitk")
-    )
+        for variant in ("gemv", "general_tma", "splitk"))
 
 
 def _validate_manifest_output(path: Path) -> tuple[bool, bytes]:
@@ -375,17 +334,10 @@ def _validate_manifest_output(path: Path) -> tuple[bool, bytes]:
             object_pairs_hook=_reject_duplicate_json_keys,
         )
     except (ModelArchiveError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ModelArchiveError(
-            f"Manifest output already exists and is not empty: {path}"
-        ) from exc
-    if (
-        type(value) is not dict
-        or set(value) != {"schema_version", "packages"}
-        or type(value["schema_version"]) is not int
-        or value["schema_version"] != 1
-        or type(value["packages"]) is not dict
-        or value["packages"]
-    ):
+        raise ModelArchiveError(f"Manifest output already exists and is not empty: {path}") from exc
+    if (type(value) is not dict or set(value) != {"schema_version", "packages"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or type(value["packages"]) is not dict or value["packages"]):
         raise ModelArchiveError(f"Manifest output already exists and is not empty: {path}")
     return True, payload
 
@@ -407,9 +359,7 @@ def _lock_manifest_output(path: Path):
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise ModelArchiveError(
-                f"Manifest output is locked by another publisher: {path}"
-            ) from exc
+            raise ModelArchiveError(f"Manifest output is locked by another publisher: {path}") from exc
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(f"pid={os.getpid()}\n")
             handle.flush()
@@ -426,14 +376,8 @@ def _validate_package_url(url: str, platform_key: str, model_version: str) -> st
     package_url = url.strip()
     expected_name = platform_package_name(platform_key, model_version)
     parsed = urlparse(package_url)
-    if (
-        parsed.scheme.lower() != "https"
-        or not parsed.netloc
-        or PurePosixPath(parsed.path).name != expected_name
-    ):
-        raise ModelArchiveError(
-            f"package URL must use HTTPS and end with {expected_name!r}: {url!r}"
-        )
+    if (parsed.scheme.lower() != "https" or not parsed.netloc or PurePosixPath(parsed.path).name != expected_name):
+        raise ModelArchiveError(f"package URL must use HTTPS and end with {expected_name!r}: {url!r}")
     return package_url
 
 
@@ -484,9 +428,7 @@ def _write_publishing_manifest(
             try:
                 current_output_state = _validate_manifest_output(path)
             except ModelArchiveError as exc:
-                raise ModelArchiveError(
-                    f"Manifest output changed during publishing: {path}"
-                ) from exc
+                raise ModelArchiveError(f"Manifest output changed during publishing: {path}") from exc
             if current_output_state != expected_output_state:
                 raise ModelArchiveError(f"Manifest output changed during publishing: {path}")
             os.replace(temporary, path)
@@ -494,9 +436,7 @@ def _write_publishing_manifest(
             try:
                 os.link(temporary, path)
             except FileExistsError as exc:
-                raise ModelArchiveError(
-                    f"Manifest output changed during publishing: {path}"
-                ) from exc
+                raise ModelArchiveError(f"Manifest output changed during publishing: {path}") from exc
             temporary.unlink()
     except Exception:
         try:
@@ -524,17 +464,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.platform_key,
             args.model_version,
         )
-    publishing_lock = (
-        _lock_manifest_output(args.manifest_output)
-        if args.manifest_output is not None
-        else nullcontext()
-    )
+    publishing_lock = (_lock_manifest_output(args.manifest_output)
+                       if args.manifest_output is not None else nullcontext())
     with publishing_lock:
-        expected_output_state = (
-            _validate_manifest_output(args.manifest_output)
-            if args.manifest_output is not None
-            else None
-        )
+        expected_output_state = (_validate_manifest_output(args.manifest_output)
+                                 if args.manifest_output is not None else None)
         output = migrate_platform_package(
             args.model,
             platform_key=args.platform_key,

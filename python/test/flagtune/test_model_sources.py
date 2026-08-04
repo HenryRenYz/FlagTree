@@ -10,7 +10,6 @@ import pytest
 from triton.flagtune.contract.identity import ModelIdentityError
 from triton.flagtune.runtime import model_sources
 
-
 PLATFORM_KEY = "nvidia-h20"
 ENTRY_1 = {
     "url": "https://example.invalid/nvidia-h20_v1.0.0.tar.gz",
@@ -25,10 +24,10 @@ ENTRY_2 = {
 @pytest.fixture(autouse=True)
 def clean_remote_environment(monkeypatch):
     for name in (
-        "FLAGTUNE_DISABLE_REMOTE",
-        "FLAGTUNE_MANIFEST_URL",
-        "FLAGTUNE_MODEL_CACHE",
-        "FLAGTUNE_MODEL_URLS",
+            "FLAGTUNE_DISABLE_REMOTE",
+            "FLAGTUNE_MANIFEST_URL",
+            "FLAGTUNE_MODEL_CACHE",
+            "FLAGTUNE_MODEL_URLS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -46,6 +45,7 @@ def response_for(manifest, calls):
     payload = json.dumps(manifest).encode("utf-8")
 
     class Response:
+
         def __enter__(self):
             return self
 
@@ -111,7 +111,9 @@ def test_platform_key_is_normalized_and_validated(monkeypatch):
     install_override(monkeypatch, {"versions": {"1.0.0": ENTRY_1}})
 
     assert model_sources.resolve_package_info(" NVIDIA-H20 ") == model_sources.RemotePackage(
-        "1.0.0", ENTRY_1["url"], "1" * 64,
+        "1.0.0",
+        ENTRY_1["url"],
+        "1" * 64,
     )
     with pytest.raises(ModelIdentityError):
         model_sources.resolve_package_info("../nvidia-h20")
@@ -243,8 +245,7 @@ def test_valid_override_precedes_cache_remote_and_builtin(tmp_path, monkeypatch)
     )
 
     assert model_sources.resolve_package_info(PLATFORM_KEY) == model_sources.RemotePackage(
-        "2.0.0", ENTRY_2["url"], ENTRY_2["sha256"]
-    )
+        "2.0.0", ENTRY_2["url"], ENTRY_2["sha256"])
 
 
 def test_non_https_manifest_url_never_opens_network(tmp_path, monkeypatch):

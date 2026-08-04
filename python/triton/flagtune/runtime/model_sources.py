@@ -147,13 +147,9 @@ def _env_model_urls() -> Optional[Dict[str, Any]]:
             with path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ManifestContractError(
-            f"cannot read valid JSON from FLAGTUNE_MODEL_URLS: {exc}"
-        ) from exc
+        raise ManifestContractError(f"cannot read valid JSON from FLAGTUNE_MODEL_URLS: {exc}") from exc
     if not _manifest_is_valid(data):
-        raise ManifestContractError(
-            "FLAGTUNE_MODEL_URLS does not satisfy FlagTune manifest schema 1"
-        )
+        raise ManifestContractError("FLAGTUNE_MODEL_URLS does not satisfy FlagTune manifest schema 1")
     return data
 
 

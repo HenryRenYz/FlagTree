@@ -25,9 +25,7 @@ def test_default_dtype_extraction_ignores_non_tensor_dtype_attributes():
 
 def test_enabled_flagtune_propagates_model_initialization_failure(monkeypatch):
     """An explicitly enabled model contract must never degrade to Triton pruning."""
-    identity = ModelIdentity(
-        "nvidia-h20", "flaggems/mm", "gemv", "bf16-bf16-bf16"
-    )
+    identity = ModelIdentity("nvidia-h20", "flaggems/mm", "gemv", "bf16-bf16-bf16")
     tuner = Flagtuner.__new__(Flagtuner)
     tuner._flagtune_op_id = "flaggems/mm"
     tuner._flagtune_variant = "gemv"

@@ -234,7 +234,8 @@ variants:
     )
     info = load_operator_config(config_path)
     assert info.op_id == "vendor/add"
-    assert artifact_key(PLATFORM_KEY, info.op_id, "general", DTYPE_KEY) == (f"{PLATFORM_KEY}/vendor/add/general/{DTYPE_KEY}")
+    assert artifact_key(PLATFORM_KEY, info.op_id, "general",
+                        DTYPE_KEY) == (f"{PLATFORM_KEY}/vendor/add/general/{DTYPE_KEY}")
 
 
 def test_registration_rejects_unknown_variables_and_unsafe_identities():
@@ -254,7 +255,6 @@ def test_registration_rejects_unknown_variables_and_unsafe_identities():
         parse_operator_config(bad_variant)
 
 
-
 def test_single_model_config_round_trip_preserves_contract(tmp_path):
     """Serialize and compile one variant with ordered inputs, params, and features."""
     yaml = pytest.importorskip("yaml")
@@ -270,7 +270,6 @@ def test_single_model_config_round_trip_preserves_contract(tmp_path):
     assert model_config_sha256(raw) == model_config_sha256(config)
     other_version = variant_to_model_config(variant, _identity(), DTYPES, GPU, "1.2.4")
     assert model_config_sha256(other_version) != model_config_sha256(config)
-
 
 
 def test_model_config_rejects_unknown_custom_operation():

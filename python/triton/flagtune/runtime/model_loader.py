@@ -186,9 +186,7 @@ def _archive_sha256(path: Path) -> str:
 def _publish_package_bytes(path: Path, payload: bytes, expected_digest: str) -> None:
     """Atomically publish immutable package bytes without replacing a winner."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -199,19 +197,15 @@ def _publish_package_bytes(path: Path, payload: bytes, expected_digest: str) -> 
             os.link(temporary, path)
         except FileExistsError:
             if path.is_symlink():
-                raise IncompatibleModelError(
-                    f"FlagTune package cache destination is a symlink: {path}"
-                )
+                raise IncompatibleModelError(f"FlagTune package cache destination is a symlink: {path}")
             try:
                 winner_digest = _archive_sha256(path)
             except OSError as exc:
                 raise IncompatibleModelError(
-                    f"cannot inspect concurrent FlagTune package winner at {path}: {exc}"
-                ) from exc
+                    f"cannot inspect concurrent FlagTune package winner at {path}: {exc}") from exc
             if winner_digest != expected_digest:
                 raise IncompatibleModelError(
-                    f"immutable FlagTune package at {path} already exists with a different SHA-256"
-                )
+                    f"immutable FlagTune package at {path} already exists with a different SHA-256")
     finally:
         try:
             temporary.unlink()
@@ -325,16 +319,13 @@ class FlagTuneModelManager:
                     expected_version=resolved_version,
                 )
             except (OSError, ModelArchiveError) as exc:
-                raise IncompatibleModelError(
-                    f"invalid FlagTune platform package at {package_path}: {exc}"
-                ) from exc
+                raise IncompatibleModelError(f"invalid FlagTune platform package at {package_path}: {exc}") from exc
             self._packages[package_key] = package
 
         entry = package.models.get(identity.artifact_key)
         if entry is None:
             raise IncompatibleModelError(
-                f"FlagTune platform package {package_path} has no model for {identity.artifact_key!r}"
-            )
+                f"FlagTune platform package {package_path} has no model for {identity.artifact_key!r}")
         member = entry["path"]
         try:
             members = read_model_archive_bytes(
@@ -342,9 +333,7 @@ class FlagTuneModelManager:
                 source=f"{package_path}:{member}",
             )
         except (KeyError, ModelArchiveError) as exc:
-            raise IncompatibleModelError(
-                f"invalid FlagTune child model at {package_path}:{member}: {exc}"
-            ) from exc
+            raise IncompatibleModelError(f"invalid FlagTune child model at {package_path}:{member}: {exc}") from exc
         loaded = self._load_bundle_members(
             identity,
             resolved_version,
@@ -385,11 +374,8 @@ class FlagTuneModelManager:
             return cached
 
         cached_version = self._package_version(cached, identity.platform_key) if cached is not None else None
-        cached_valid = (
-            cached is not None
-            and cached_version is not None
-            and _package_is_valid(cached, identity.platform_key, cached_version)
-        )
+        cached_valid = (cached is not None and cached_version is not None
+                        and _package_is_valid(cached, identity.platform_key, cached_version))
         if os.environ.get("FLAGTUNE_DISABLE_REMOTE"):
             if cached_valid:
                 return cached
@@ -409,10 +395,8 @@ class FlagTuneModelManager:
                 if cached_parsed.selection_key == remote_parsed.selection_key:
                     cached_digest = _archive_sha256(cached)
                     if cached_digest != remote.sha256:
-                        raise IncompatibleModelError(
-                            f"immutable FlagTune package {identity.platform_key!r} version "
-                            f"{remote.version!r} changed SHA-256"
-                        )
+                        raise IncompatibleModelError(f"immutable FlagTune package {identity.platform_key!r} version "
+                                                     f"{remote.version!r} changed SHA-256")
                     if cached_valid:
                         return cached
             if remote is not None:
@@ -424,17 +408,14 @@ class FlagTuneModelManager:
                 return cached
 
         suffix = f" at version {requested!r}" if requested is not None else ""
-        raise FileNotFoundError(
-            f"FlagTune model not found for {identity.artifact_key!r}{suffix}. "
-            f"Checked flat user packages, package cache ({cache_root}), and remote."
-        )
+        raise FileNotFoundError(f"FlagTune model not found for {identity.artifact_key!r}{suffix}. "
+                                f"Checked flat user packages, package cache ({cache_root}), and remote.")
 
     def _validate_flagtune_version(self, config: Dict[str, Any], source: str) -> None:
         min_ver = config.get("flagtune_version_min")
         if min_ver and _parse_compat_version(min_ver) > _parse_compat_version(_FLAGTUNE_VERSION):
             raise IncompatibleModelError(
-                f"Model at {source} requires FlagTune >= {min_ver}, current version is {_FLAGTUNE_VERSION}"
-            )
+                f"Model at {source} requires FlagTune >= {min_ver}, current version is {_FLAGTUNE_VERSION}")
         max_ver = config.get("flagtune_version_max")
         if max_ver and _parse_compat_version(max_ver) < _parse_compat_version(_FLAGTUNE_VERSION):
             logger.warning(
@@ -453,12 +434,8 @@ class FlagTuneModelManager:
         model_member: str,
     ) -> LoadedFlagTuneModel:
         source = f"{package_path}:{model_member}"
-        variant, predictor = self._validate_bundle_members(
-            identity, model_version, members, source
-        )
-        return LoadedFlagTuneModel(
-            identity, variant, predictor, package_path, model_member, model_version
-        )
+        variant, predictor = self._validate_bundle_members(identity, model_version, members, source)
+        return LoadedFlagTuneModel(identity, variant, predictor, package_path, model_member, model_version)
 
     def _validate_bundle_members(
         self,
@@ -474,15 +451,12 @@ class FlagTuneModelManager:
         )
         declared = model_identity_from_config(config)
         if declared != identity:
-            raise IncompatibleModelError(
-                f"model identity mismatch for {source}: requested {identity.artifact_key!r}, "
-                f"config declares {declared.artifact_key!r}"
-            )
+            raise IncompatibleModelError(f"model identity mismatch for {source}: requested {identity.artifact_key!r}, "
+                                         f"config declares {declared.artifact_key!r}")
         declared_version = config.get("model_version")
         if declared_version != model_version:
             raise IncompatibleModelError(
-                f"model version mismatch for {source}: package={model_version!r}, config={declared_version!r}"
-            )
+                f"model version mismatch for {source}: package={model_version!r}, config={declared_version!r}")
         self._validate_flagtune_version(config, source)
         config_digest = model_config_sha256(config)
         predictor = _XGBoostPredictorCompat(
@@ -494,13 +468,9 @@ class FlagTuneModelManager:
         try:
             summary = json.loads(members["training_summary.json"].decode("utf-8"))
         except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise IncompatibleModelError(
-                f"invalid FlagTune training summary at {source}: {exc}"
-            ) from exc
+            raise IncompatibleModelError(f"invalid FlagTune training summary at {source}: {exc}") from exc
         if not isinstance(summary, dict):
-            raise IncompatibleModelError(
-                f"FlagTune training summary must be an object at {source}"
-            )
+            raise IncompatibleModelError(f"FlagTune training summary must be an object at {source}")
         expected_features = list(variant.feature_names)
         expected_summary = {
             "feature_cols": expected_features,
@@ -513,16 +483,12 @@ class FlagTuneModelManager:
             if name == "feature_count" and type(actual) is not int:
                 actual = None
             if actual != expected:
-                raise IncompatibleModelError(
-                    f"FlagTune training summary {name} mismatch at {source}: "
-                    f"{actual!r} != {expected!r}"
-                )
+                raise IncompatibleModelError(f"FlagTune training summary {name} mismatch at {source}: "
+                                             f"{actual!r} != {expected!r}")
         for name, expected in (("op_id", identity.op_id), ("variant", identity.variant)):
             if name in summary and summary[name] != expected:
-                raise IncompatibleModelError(
-                    f"FlagTune training summary {name} mismatch at {source}: "
-                    f"{summary[name]!r} != {expected!r}"
-                )
+                raise IncompatibleModelError(f"FlagTune training summary {name} mismatch at {source}: "
+                                             f"{summary[name]!r} != {expected!r}")
         return variant, predictor
 
     def _validate_package_for_cache(
@@ -545,13 +511,9 @@ class FlagTuneModelManager:
             missing = sorted(required - actual)
             unexpected = sorted(actual - required)
             if missing:
-                raise IncompatibleModelError(
-                    f"FlagTune package has missing required H20 models: {missing}"
-                )
+                raise IncompatibleModelError(f"FlagTune package has missing required H20 models: {missing}")
             if unexpected:
-                raise IncompatibleModelError(
-                    f"FlagTune package has unexpected H20 models: {unexpected}"
-                )
+                raise IncompatibleModelError(f"FlagTune package has unexpected H20 models: {unexpected}")
         for artifact in sorted(package.models):
             identity_parts = artifact.split("/")
             identity = ModelIdentity(
@@ -562,13 +524,9 @@ class FlagTuneModelManager:
             )
             member = package.models[artifact]["path"]
             try:
-                members = read_model_archive_bytes(
-                    package.archives[artifact], source=f"{source}:{member}"
-                )
+                members = read_model_archive_bytes(package.archives[artifact], source=f"{source}:{member}")
             except (KeyError, ModelArchiveError) as exc:
-                raise IncompatibleModelError(
-                    f"invalid FlagTune child model at {source}:{member}: {exc}"
-                ) from exc
+                raise IncompatibleModelError(f"invalid FlagTune child model at {source}:{member}: {exc}") from exc
             self._validate_bundle_members(
                 identity,
                 package.package_version,
@@ -603,16 +561,13 @@ class FlagTuneModelManager:
                     source=package.url,
                 )
             except ModelArchiveError as exc:
-                raise IncompatibleModelError(
-                    f"invalid FlagTune platform package from {package.url}: {exc}"
-                ) from exc
+                raise IncompatibleModelError(f"invalid FlagTune platform package from {package.url}: {exc}") from exc
             self._validate_package_for_cache(parsed_package, package.url)
             if destination.is_file() and not destination.is_symlink():
                 if _archive_sha256(destination) != package.sha256:
                     raise IncompatibleModelError(
                         f"immutable FlagTune package {platform_key!r} version {package.version!r} "
-                        "already exists with a different SHA-256"
-                    )
+                        "already exists with a different SHA-256")
                 return destination
             _publish_package_bytes(destination, payload, package.sha256)
             self._packages[(platform_key, package.version, digest)] = parsed_package
@@ -628,6 +583,7 @@ class FlagTuneModelManager:
                 exc_info=True,
             )
             return None
+
 
 class _XGBoostPredictorCompat:
     """Adapt an XGBoost ranker while enforcing its embedded schema contract.

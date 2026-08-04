@@ -47,7 +47,6 @@ from typing import Dict, Mapping, Tuple
 
 from triton.flagtune.contract.identity import (
     ModelIdentity,
-    validate_identity_segment,
     validate_platform_key,
 )
 
@@ -167,14 +166,11 @@ def _validate_child_archive(payload: bytes, identity: ModelIdentity, version: st
     except (TypeError, ValueError) as exc:
         raise ModelArchiveError(f"invalid child model config at {source}: {exc}") from exc
     if declared_identity != identity:
-        raise ModelArchiveError(
-            f"child model identity mismatch at {source}: "
-            f"{declared_identity.artifact_key!r} != {identity.artifact_key!r}"
-        )
+        raise ModelArchiveError(f"child model identity mismatch at {source}: "
+                                f"{declared_identity.artifact_key!r} != {identity.artifact_key!r}")
     if config.get("model_version") != version:
         raise ModelArchiveError(
-            f"child model version mismatch at {source}: {config.get('model_version')!r} != {version!r}"
-        )
+            f"child model version mismatch at {source}: {config.get('model_version')!r} != {version!r}")
 
 
 def _write_deterministic_tar(path: Path, members: Mapping[str, bytes]) -> Path:
@@ -212,12 +208,12 @@ def _write_deterministic_tar(path: Path, members: Mapping[str, bytes]) -> Path:
 
 
 def write_platform_package(
-    path: Path | str,
-    *,
-    platform_key: str,
-    package_version: str,
-    model_archives: Mapping[ModelIdentity, Path | str],
-    required_identities=(),
+        path: Path | str,
+        *,
+        platform_key: str,
+        package_version: str,
+        model_archives: Mapping[ModelIdentity, Path | str],
+        required_identities=(),
 ) -> Path:
     """Write a reproducible platform package containing indexed child archives."""
     platform = validate_platform_key(platform_key)
@@ -233,8 +229,7 @@ def write_platform_package(
             raise TypeError("platform package model archive keys must be ModelIdentity values")
         if identity.platform_key != platform:
             raise ModelArchiveError(
-                f"model identity platform does not match package: {identity.platform_key!r} != {platform!r}"
-            )
+                f"model identity platform does not match package: {identity.platform_key!r} != {platform!r}")
         member_path = _platform_model_path(identity)
         payload = Path(archive_path).read_bytes()
         _validate_child_archive(payload, identity, version, str(archive_path))
@@ -340,9 +335,7 @@ def read_platform_package_bytes(
         if not isinstance(path, str):
             raise ModelArchiveError(f"platform package model path must be a string for {artifact!r}")
         if path in indexed_paths:
-            raise ModelArchiveError(
-                f"duplicate model path {path!r} for {indexed_paths[path]!r} and {artifact!r}"
-            )
+            raise ModelArchiveError(f"duplicate model path {path!r} for {indexed_paths[path]!r} and {artifact!r}")
         indexed_paths[path] = artifact
         identities[artifact] = identity
         if path != _platform_model_path(identity):
@@ -377,9 +370,7 @@ def read_platform_package(
     package_path = Path(path)
     expected_name = platform_package_name(expected_platform_key, expected_version)
     if package_path.name != expected_name:
-        raise ModelArchiveError(
-            f"platform package filename mismatch: {package_path.name!r} != {expected_name!r}"
-        )
+        raise ModelArchiveError(f"platform package filename mismatch: {package_path.name!r} != {expected_name!r}")
     return read_platform_package_bytes(
         package_path.read_bytes(),
         expected_platform_key=expected_platform_key,
