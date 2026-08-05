@@ -21,7 +21,7 @@
 # SOFTWARE.
 """Define the installed FlagTune package version.
 
-``__version__`` is sent in model/manifest download user agents and is compared
+``__version__`` is sent in model package download user agents and is compared
 with optional ``flagtune_version_min`` and ``flagtune_version_max`` fields in
 an archive's YAML contract by :class:`triton.flagtune.runtime.model_loader.FlagTuneModelManager`.
 It is the runtime implementation compatibility version, not the independently

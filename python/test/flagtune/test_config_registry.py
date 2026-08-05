@@ -355,7 +355,6 @@ def test_implicit_load_reuses_first_bundle_before_reresolution(tmp_path, monkeyp
     first = manager.load("vendor/mm", "general", platform_key=PLATFORM_KEY, dtype_key=DTYPE_KEY)
 
     _export_platform_package(model_root, "2.0.0")
-    monkeypatch.setenv("FLAGTUNE_MODEL_REFRESH", "1")
     monkeypatch.setenv("FLAGTUNE_MODEL_VERSION", "2.0.0")
     second = manager.load("vendor/mm", "general", platform_key=PLATFORM_KEY, dtype_key=DTYPE_KEY)
 

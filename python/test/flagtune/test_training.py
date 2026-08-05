@@ -582,7 +582,7 @@ def test_migration_cli_writes_complete_h20_package(tmp_path, capsys, manifest_st
     ]
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
     manifest_output = tmp_path / "flagtune-manifest.json"
-    package_url = "https://models.example.com/flagtune/nvidia-h20_v1.0.0.tar.gz"
+    package_url = "https://models.example.com/flagtune/flagtune-xgb-nvidia-h20_v0.1.0.tar.gz"
     arguments = [
         "--platform-key",
         "nvidia-h20",
@@ -670,11 +670,11 @@ def test_migration_cli_requires_manifest_arguments_together(
     assert not output.exists()
 
 
-def test_migration_cli_rejects_noncanonical_package_url_before_migration(tmp_path):
+def test_migration_cli_rejects_non_https_package_url_before_migration(tmp_path):
     output = tmp_path / "nvidia-h20_v1.0.0.tar.gz"
     manifest_output = tmp_path / "flagtune-manifest.json"
 
-    with pytest.raises(ModelArchiveError, match="package URL must use HTTPS and end with"):
+    with pytest.raises(ModelArchiveError, match="package URL must use HTTPS"):
         migration.main([
             "--platform-key",
             "nvidia-h20",

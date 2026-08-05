@@ -35,7 +35,7 @@ import hashlib
 import json
 import os
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -372,12 +372,11 @@ def _lock_manifest_output(path: Path):
             pass
 
 
-def _validate_package_url(url: str, platform_key: str, model_version: str) -> str:
+def _validate_package_url(url: str) -> str:
     package_url = url.strip()
-    expected_name = platform_package_name(platform_key, model_version)
     parsed = urlparse(package_url)
-    if (parsed.scheme.lower() != "https" or not parsed.netloc or PurePosixPath(parsed.path).name != expected_name):
-        raise ModelArchiveError(f"package URL must use HTTPS and end with {expected_name!r}: {url!r}")
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ModelArchiveError(f"package URL must use HTTPS: {url!r}")
     return package_url
 
 
@@ -459,11 +458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--manifest-output and --package-url must be provided together")
     package_url = None
     if args.manifest_output is not None:
-        package_url = _validate_package_url(
-            args.package_url,
-            args.platform_key,
-            args.model_version,
-        )
+        package_url = _validate_package_url(args.package_url)
     publishing_lock = (_lock_manifest_output(args.manifest_output)
                        if args.manifest_output is not None else nullcontext())
     with publishing_lock:

@@ -1,9 +1,5 @@
 import json
-import time
-from email.message import Message
-from io import BytesIO
-from urllib.request import BaseHandler
-from urllib.response import addinfourl
+import re
 
 import pytest
 
@@ -22,13 +18,8 @@ ENTRY_2 = {
 
 
 @pytest.fixture(autouse=True)
-def clean_remote_environment(monkeypatch):
-    for name in (
-            "FLAGTUNE_DISABLE_REMOTE",
-            "FLAGTUNE_MANIFEST_URL",
-            "FLAGTUNE_MODEL_CACHE",
-            "FLAGTUNE_MODEL_URLS",
-    ):
+def clean_manifest_environment(monkeypatch):
+    for name in ("FLAGTUNE_LOCAL_MANIFEST", "FLAGTUNE_MODEL_CACHE", "FLAGTUNE_MODEL_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -36,68 +27,32 @@ def manifest_with(entry, *, platform_key=PLATFORM_KEY):
     return {"schema_version": 1, "packages": {platform_key: entry}}
 
 
-def install_override(monkeypatch, entry, *, platform_key=PLATFORM_KEY):
-    monkeypatch.setenv("FLAGTUNE_MODEL_URLS", json.dumps(manifest_with(entry, platform_key=platform_key)))
-    monkeypatch.setenv("FLAGTUNE_DISABLE_REMOTE", "1")
+def write_manifest(path, entry, *, platform_key=PLATFORM_KEY):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest_with(entry, platform_key=platform_key)))
+    return path
 
 
-def response_for(manifest, calls):
-    payload = json.dumps(manifest).encode("utf-8")
-
-    class Response:
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return payload
-
-    def urlopen(request, **_kwargs):
-        calls.append(request)
-        return Response()
-
-    return urlopen
+def install_default_manifest(tmp_path, monkeypatch, entry, *, platform_key=PLATFORM_KEY):
+    cache_root = tmp_path / "cache"
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+    return write_manifest(cache_root / "manifest.json", entry, platform_key=platform_key)
 
 
-class _RedirectingTransport(BaseHandler):
-    handler_order = 100
-
-    def __init__(self, payload, redirected_url, opened):
-        self._payload = payload
-        self._redirected_url = redirected_url
-        self._opened = opened
-
-    @staticmethod
-    def _response(payload, headers, url, code, message):
-        response = addinfourl(BytesIO(payload), headers, url, code=code)
-        response.msg = message
-        return response
-
-    def https_open(self, request):
-        self._opened.append(request.full_url)
-        headers = Message()
-        headers["Location"] = self._redirected_url
-        return self._response(b"", headers, request.full_url, 302, "Found")
-
-    def http_open(self, request):
-        self._opened.append(request.full_url)
-        return self._response(self._payload, Message(), request.full_url, 200, "OK")
+def install_local_manifest(tmp_path, monkeypatch, entry, *, platform_key=PLATFORM_KEY):
+    path = write_manifest(tmp_path / "flagtune-local-manifest.json", entry, platform_key=platform_key)
+    monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", str(path))
+    return path
 
 
-def test_manifest_url_defaults_and_allows_environment_override(monkeypatch):
-    assert model_sources._manifest_url() == "https://models.example.com/flagtune/manifest.json"
-    monkeypatch.setenv("FLAGTUNE_MANIFEST_URL", " https://mirror.example.com/packages.json ")
-    assert model_sources._manifest_url() == "https://mirror.example.com/packages.json"
-
-
-def test_exact_pin_and_highest_semver_selection_ignore_latest(monkeypatch):
-    install_override(monkeypatch, {
+@pytest.mark.parametrize("source", ("default", "explicit"))
+def test_exact_pin_and_highest_semver_selection_ignore_latest(tmp_path, monkeypatch, source):
+    entry = {
         "latest": "1.0.0",
         "versions": {"1.0.0": ENTRY_1, "2.0.0": ENTRY_2},
-    })
+    }
+    installer = install_default_manifest if source == "default" else install_local_manifest
+    installer(tmp_path, monkeypatch, entry)
 
     highest = model_sources.resolve_package_info(PLATFORM_KEY)
     exact = model_sources.resolve_package_info(PLATFORM_KEY, version="1.0.0")
@@ -107,8 +62,226 @@ def test_exact_pin_and_highest_semver_selection_ignore_latest(monkeypatch):
     assert model_sources.resolve_package_info(PLATFORM_KEY, version="3.0.0") is None
 
 
-def test_platform_key_is_normalized_and_validated(monkeypatch):
-    install_override(monkeypatch, {"versions": {"1.0.0": ENTRY_1}})
+def test_explicit_manifest_precedes_default_cache_manifest(tmp_path, monkeypatch):
+    install_default_manifest(tmp_path, monkeypatch, {"versions": {"1.0.0": ENTRY_1}})
+    install_local_manifest(tmp_path, monkeypatch, {"versions": {"2.0.0": ENTRY_2}})
+
+    assert model_sources.resolve_package_info(PLATFORM_KEY) == model_sources.RemotePackage(
+        "2.0.0",
+        ENTRY_2["url"],
+        "2" * 64,
+    )
+
+
+def test_local_manifest_accepts_relative_environment_path(tmp_path, monkeypatch):
+    manifest = write_manifest(
+        tmp_path / "flagtune-local-manifest.json",
+        {"versions": {"1.0.0": ENTRY_1}},
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", manifest.name)
+
+    assert model_sources.resolve_package_info(PLATFORM_KEY) == model_sources.RemotePackage(
+        "1.0.0",
+        ENTRY_1["url"],
+        "1" * 64,
+    )
+
+
+def test_local_manifest_rejects_empty_environment_value(monkeypatch):
+    monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", "  ")
+
+    with pytest.raises(model_sources.ManifestContractError, match="present but empty"):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+
+def test_missing_default_manifest_is_generated_from_bundled_catalog(tmp_path, monkeypatch):
+    cache_root = tmp_path / "cache"
+    manifest_path = cache_root / "manifest.json"
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+
+    package = model_sources.resolve_package_info(PLATFORM_KEY)
+
+    assert package == model_sources.RemotePackage(
+        "1.0.0",
+        "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/flagtune-xgb-nvidia-h20_v0.1.0.tar.gz",
+        "b26b1057d3149df7de1e3bb91e6162bcb475709e41719bcf435f81ac3a2b8d4e",
+    )
+    assert json.loads(manifest_path.read_text())["packages"][PLATFORM_KEY]["versions"]["1.0.0"] == {
+        "url": package.url,
+        "sha256": package.sha256,
+    }
+    assert not list(cache_root.glob(".manifest.json.*.tmp"))
+
+
+def test_default_manifest_generation_can_be_disabled(tmp_path, monkeypatch):
+    cache_root = tmp_path / "cache"
+    manifest_path = cache_root / "manifest.json"
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+
+    with pytest.raises(model_sources.ManifestContractError, match="regular file"):
+        model_sources.resolve_package_info(PLATFORM_KEY, generate_default=False)
+
+    assert not manifest_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("source", "case"),
+    [
+        ("explicit", "missing"),
+        ("default", "directory"),
+        ("explicit", "directory"),
+        ("default", "invalid-json"),
+        ("explicit", "invalid-json"),
+    ],
+)
+def test_manifest_rejects_unreadable_input(tmp_path, monkeypatch, source, case):
+    cache_root = tmp_path / "cache"
+    path = cache_root / "manifest.json" if source == "default" else tmp_path / "local-manifest.json"
+    if case == "directory":
+        path.mkdir(parents=True)
+    elif case == "invalid-json":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not-json")
+
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+    if source == "explicit":
+        monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", str(path))
+
+    message = "regular file" if case != "invalid-json" else "valid JSON"
+    with pytest.raises(model_sources.ManifestContractError, match=message):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+    if source == "explicit" and case == "missing":
+        assert not (cache_root / "manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("duplicate_key", "payload"),
+    [
+        (
+            "packages",
+            '{"schema_version":1,"packages":{},"packages":{}}',
+        ),
+        (
+            "1.0.0",
+            '{"schema_version":1,"packages":{"nvidia-h20":{"versions":{'
+            '"1.0.0":{"url":"https://example.invalid/first.tar.gz","sha256":"'
+            '1111111111111111111111111111111111111111111111111111111111111111"},'
+            '"1.0.0":{"url":"https://example.invalid/second.tar.gz","sha256":"'
+            '2222222222222222222222222222222222222222222222222222222222222222"}'
+            '}}}}',
+        ),
+        (
+            "url",
+            '{"schema_version":1,"packages":{"nvidia-h20":{"versions":{'
+            '"1.0.0":{"url":"https://example.invalid/first.tar.gz",'
+            '"url":"https://example.invalid/second.tar.gz",'
+            '"sha256":"1111111111111111111111111111111111111111111111111111111111111111"}'
+            '}}}}',
+        ),
+    ],
+)
+def test_manifest_rejects_duplicate_json_keys_at_any_object_level(
+    tmp_path,
+    monkeypatch,
+    duplicate_key,
+    payload,
+):
+    cache_root = tmp_path / "cache"
+    path = cache_root / "manifest.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(payload)
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+
+    with pytest.raises(
+            model_sources.ManifestContractError,
+            match=rf"duplicate JSON key.*{re.escape(duplicate_key)}",
+    ):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+
+@pytest.mark.parametrize("source", ("default", "explicit"))
+def test_manifest_rejects_symlink(tmp_path, monkeypatch, source):
+    target = write_manifest(
+        tmp_path / "target.json",
+        {"versions": {"1.0.0": ENTRY_1}},
+    )
+    cache_root = tmp_path / "cache"
+    link = cache_root / "manifest.json" if source == "default" else tmp_path / "manifest-link.json"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(target)
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+    if source == "explicit":
+        monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", str(link))
+
+    with pytest.raises(model_sources.ManifestContractError, match="symlink"):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+
+@pytest.mark.parametrize("source", ("default", "explicit"))
+@pytest.mark.parametrize("location", ("root", "package", "metadata"))
+def test_manifest_rejects_unknown_fields(tmp_path, monkeypatch, source, location):
+    manifest = manifest_with({"versions": {"1.0.0": dict(ENTRY_1)}})
+    if location == "root":
+        manifest["extra"] = True
+    elif location == "package":
+        manifest["packages"][PLATFORM_KEY]["extra"] = True
+    else:
+        manifest["packages"][PLATFORM_KEY]["versions"]["1.0.0"]["extra"] = True
+
+    cache_root = tmp_path / "cache"
+    path = cache_root / "manifest.json" if source == "default" else tmp_path / "local-manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(cache_root))
+    if source == "explicit":
+        monkeypatch.setenv("FLAGTUNE_LOCAL_MANIFEST", str(path))
+
+    with pytest.raises(model_sources.ManifestContractError, match="schema 1"):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+
+@pytest.mark.parametrize("source", ("default", "explicit"))
+def test_manifest_missing_platform_returns_none(tmp_path, monkeypatch, source):
+    installer = install_default_manifest if source == "default" else install_local_manifest
+    installer(
+        tmp_path,
+        monkeypatch,
+        {
+            "versions": {
+                "1.0.0": {
+                    "url": "https://example.invalid/nvidia-a100_v1.0.0.tar.gz",
+                    "sha256": "1" * 64,
+                },
+            },
+        },
+        platform_key="nvidia-a100",
+    )
+
+    assert model_sources.resolve_package_info(PLATFORM_KEY) is None
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"file": "../nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64},
+        {"file": "/tmp/nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64},
+        {"file": "models/nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64},
+        {"file": r"models\nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64},
+        {"file": "nvidia-h20_v2.0.0.tar.gz", "sha256": "a" * 64},
+        {"file": "nvidia-h20_v1.0.0.tar.gz", "sha256": "A" * 64},
+    ],
+)
+def test_manifest_rejects_file_metadata(tmp_path, monkeypatch, metadata):
+    install_default_manifest(tmp_path, monkeypatch, {"versions": {"1.0.0": metadata}})
+
+    with pytest.raises(model_sources.ManifestContractError, match="schema 1"):
+        model_sources.resolve_package_info(PLATFORM_KEY)
+
+
+def test_platform_key_is_normalized_and_validated(tmp_path, monkeypatch):
+    install_default_manifest(tmp_path, monkeypatch, {"versions": {"1.0.0": ENTRY_1}})
 
     assert model_sources.resolve_package_info(" NVIDIA-H20 ") == model_sources.RemotePackage(
         "1.0.0",
@@ -119,159 +292,45 @@ def test_platform_key_is_normalized_and_validated(monkeypatch):
         model_sources.resolve_package_info("../nvidia-h20")
 
 
-def test_force_refresh_bypasses_fresh_cached_manifest(tmp_path, monkeypatch):
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    cached = manifest_with({"versions": {"1.0.0": ENTRY_1}})
-    cached["_fetched_at"] = time.time()
-    (tmp_path / "manifest.json").write_text(json.dumps(cached))
-    calls = []
-    monkeypatch.setattr(
-        model_sources,
-        "_open_https",
-        response_for(manifest_with({"versions": {"2.0.0": ENTRY_2}}), calls),
-    )
-
-    package = model_sources.resolve_package_info(PLATFORM_KEY, force_refresh=True)
-
-    assert package == model_sources.RemotePackage("2.0.0", ENTRY_2["url"], "2" * 64)
-    assert len(calls) == 1
-    stored = json.loads((tmp_path / "manifest.json").read_text())
-    assert stored["packages"][PLATFORM_KEY]["versions"] == {"2.0.0": ENTRY_2}
-    assert not list(tmp_path.glob(".manifest.json.*.tmp"))
-
-
-def test_failed_refresh_preserves_valid_cached_manifest(tmp_path, monkeypatch):
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    cached = manifest_with({"versions": {"1.0.0": ENTRY_1}})
-    cached["_fetched_at"] = time.time()
-    cached_path = tmp_path / "manifest.json"
-    cached_path.write_text(json.dumps(cached, sort_keys=True))
-    cached_bytes = cached_path.read_bytes()
-    calls = []
-    monkeypatch.setattr(model_sources, "_open_https", response_for({"schema_version": 1, "packages": []}, calls))
-
-    package = model_sources.resolve_package_info(PLATFORM_KEY, force_refresh=True)
-
-    assert package == model_sources.RemotePackage("1.0.0", ENTRY_1["url"], "1" * 64)
-    assert cached_path.read_bytes() == cached_bytes
-    assert len(calls) == 1
-
-
 @pytest.mark.parametrize(
     ("metadata", "accepted"),
     [
         ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64}, True),
+        ({"url": "https://example.invalid/flagtune-xgb-nvidia-h20_v0.1.0.tar.gz", "sha256": "a" * 64}, True),
+        ({"url": "https://example.invalid/nvidia-h20_v2.0.0.tar.gz", "sha256": "a" * 64}, True),
+        ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tgz", "sha256": "a" * 64}, True),
+        ({"url": "https://example.invalid/other_v1.0.0.tar.gz", "sha256": "a" * 64}, True),
         ({"url": "http://example.invalid/nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64}, False),
         ({"url": "https:///nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 64}, False),
         ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tar.gz"}, False),
         ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tar.gz", "sha256": "A" * 64}, False),
         ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tar.gz", "sha256": "a" * 63}, False),
-        ({"url": "https://example.invalid/nvidia-h20_v2.0.0.tar.gz", "sha256": "a" * 64}, False),
-        ({"url": "https://example.invalid/nvidia-h20_v1.0.0.tgz", "sha256": "a" * 64}, False),
-        ({"url": "https://example.invalid/other_v1.0.0.tar.gz", "sha256": "a" * 64}, False),
     ],
 )
-def test_package_metadata_requires_https_lowercase_sha_and_canonical_basename(monkeypatch, metadata, accepted):
-    install_override(monkeypatch, {"versions": {"1.0.0": metadata}})
+def test_package_metadata_requires_https_and_lowercase_sha(tmp_path, monkeypatch, metadata, accepted):
+    install_default_manifest(tmp_path, monkeypatch, {"versions": {"1.0.0": metadata}})
 
     if accepted:
         assert model_sources.resolve_package_info(PLATFORM_KEY) is not None
     else:
-        with pytest.raises(model_sources.ManifestContractError):
+        with pytest.raises(model_sources.ManifestContractError, match="schema 1"):
             model_sources.resolve_package_info(PLATFORM_KEY)
 
 
-def test_manifest_validation_checks_every_package_url_basename(tmp_path, monkeypatch):
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    invalid_entry = {
+def test_manifest_accepts_transport_filenames_independent_of_package_identity(tmp_path, monkeypatch):
+    entry = {
         "versions": {
-            "1.0.0": ENTRY_1,
-            "2.0.0": {**ENTRY_2, "url": "https://example.invalid/wrong-name.tar.gz"},
-        }
+            "1.0.0": {**ENTRY_1, "url": "https://example.invalid/download"},
+            "2.0.0": {
+                **ENTRY_2,
+                "url": "https://example.invalid/flagtune-xgb-nvidia-h20_v2.0.0.tar.gz",
+            },
+        },
     }
-    calls = []
-    monkeypatch.setattr(model_sources, "_open_https", response_for(manifest_with(invalid_entry), calls))
-
-    assert model_sources.resolve_package_info(PLATFORM_KEY, version="1.0.0") is None
-    assert len(calls) == 1
-    assert not (tmp_path / "manifest.json").exists()
-
-
-@pytest.mark.parametrize(
-    "location",
-    ("root", "package", "metadata"),
-)
-def test_manifest_rejects_unknown_fields(monkeypatch, location):
-    manifest = manifest_with({"versions": {"1.0.0": dict(ENTRY_1)}})
-    if location == "root":
-        manifest["extra"] = True
-    elif location == "package":
-        manifest["packages"][PLATFORM_KEY]["extra"] = True
-    else:
-        manifest["packages"][PLATFORM_KEY]["versions"]["1.0.0"]["extra"] = True
-    monkeypatch.setenv("FLAGTUNE_DISABLE_REMOTE", "1")
-    monkeypatch.setenv("FLAGTUNE_MODEL_URLS", json.dumps(manifest))
-
-    with pytest.raises(model_sources.ManifestContractError, match="FLAGTUNE_MODEL_URLS"):
-        model_sources.resolve_package_info(PLATFORM_KEY)
-
-
-def test_invalid_override_does_not_fall_through_to_builtin(monkeypatch):
-    """A present malformed override is authoritative and fails closed."""
-    monkeypatch.setenv("FLAGTUNE_MODEL_URLS", "{not-json")
-    monkeypatch.setattr(
-        model_sources,
-        "_BUILTIN_TABLE",
-        {PLATFORM_KEY: {"versions": {"1.0.0": ENTRY_1}}},
-    )
-
-    with pytest.raises(model_sources.ManifestContractError, match="FLAGTUNE_MODEL_URLS"):
-        model_sources.resolve_package_info(PLATFORM_KEY)
-
-
-def test_valid_override_precedes_cache_remote_and_builtin(tmp_path, monkeypatch):
-    """A valid explicit override remains the only consulted source."""
-    install_override(monkeypatch, {"versions": {"2.0.0": ENTRY_2}})
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setattr(
-        model_sources,
-        "_load_cached_manifest",
-        lambda: pytest.fail("cache consulted after valid override"),
-    )
-    monkeypatch.setattr(
-        model_sources,
-        "_download_manifest",
-        lambda: pytest.fail("remote consulted after valid override"),
-    )
+    install_default_manifest(tmp_path, monkeypatch, entry)
 
     assert model_sources.resolve_package_info(PLATFORM_KEY) == model_sources.RemotePackage(
-        "2.0.0", ENTRY_2["url"], ENTRY_2["sha256"])
-
-
-def test_non_https_manifest_url_never_opens_network(tmp_path, monkeypatch):
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    monkeypatch.setenv("FLAGTUNE_MANIFEST_URL", "http://example.invalid/manifest.json")
-    monkeypatch.setattr(model_sources, "_open_https", lambda *_args, **_kwargs: pytest.fail("network opened"))
-
-    assert model_sources.resolve_package_info(PLATFORM_KEY) is None
-
-
-def test_manifest_https_redirect_to_http_is_rejected(tmp_path, monkeypatch):
-    import urllib.request
-
-    monkeypatch.setenv("FLAGTUNE_MODEL_CACHE", str(tmp_path))
-    payload = json.dumps(manifest_with({"versions": {"2.0.0": ENTRY_2}})).encode()
-    opened = []
-    transport = _RedirectingTransport(payload, "http://example.invalid/manifest.json", opened)
-    real_build_opener = urllib.request.build_opener
-    monkeypatch.setattr("urllib.request.urlopen", real_build_opener(transport).open)
-    monkeypatch.setattr(
-        "urllib.request.build_opener",
-        lambda *handlers: real_build_opener(*handlers, transport),
+        "2.0.0",
+        entry["versions"]["2.0.0"]["url"],
+        ENTRY_2["sha256"],
     )
-
-    package = model_sources.resolve_package_info(PLATFORM_KEY)
-
-    assert package is None
-    assert opened == ["https://models.example.com/flagtune/manifest.json"]
-    assert not (tmp_path / "manifest.json").exists()

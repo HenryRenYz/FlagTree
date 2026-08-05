@@ -31,17 +31,20 @@ used lazily by :mod:`predict`; callers normally use ``load_model_bundle`` or
 Environment variables:
   * ``FLAGTUNE_MODEL_DIR``: optional local model root with highest precedence.
     It contains flat ``<platform_key>_v<version>.tar.gz`` packages.
-  * ``FLAGTUNE_MODEL_CACHE``: writable cache root for downloaded bundles and
-    the remote URL manifest. Defaults to ``~/.flagtree/flagtune_models``.
-  * ``FLAGTUNE_MANIFEST_URL``: optional anonymous HTTPS manifest endpoint;
-    defaults to ``https://models.example.com/flagtune/manifest.json``.
+  * ``FLAGTUNE_LOCAL_MANIFEST``: optional path override for the local schema-1
+    Manifest. The default is ``$FLAGTUNE_MODEL_CACHE/manifest.json`` and is
+    generated from the bundled catalog when remote resolution first needs it.
+  * ``FLAGTUNE_MODEL_BASE_URL``: optional base URL used only while generating a
+    missing default Manifest.
+  * ``FLAGTUNE_MODEL_CACHE``: writable package-cache root. Defaults to
+    ``~/.flagtree/flagtune_models``.
   * ``FLAGTUNE_MODEL_VERSION``: optional strict-SemVer exact version pin. An
     explicit ``model_version=`` API argument takes precedence.
-  * ``FLAGTUNE_MODEL_REFRESH``: refreshes remote metadata only when its
-    whitespace-stripped value is exactly ``1``. Other values keep cache-first
-    behavior and do not perform periodic remote checks.
-  * ``FLAGTUNE_DISABLE_REMOTE``: any non-empty value prevents network lookup;
-    only the two local roots are searched.
+  * ``FLAGTUNE_MODEL_DOWNLOAD_LATEST``: when set to ``1``, consult the Manifest
+    before the package cache and select its highest SemVer for the platform.
+    Exact version pins still take precedence.
+  * ``FLAGTUNE_DISABLE_REMOTE``: when set to ``1``, prevent package downloads;
+    the user root, local Manifest, and package cache remain available.
 
 Remote artifacts and redirects must use HTTPS, and artifacts must carry a
 lowercase SHA-256 digest. The digest and complete bundle contract are validated
@@ -59,7 +62,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from urllib.error import HTTPError
 from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler
 
 import numpy as np
 
@@ -136,24 +141,6 @@ def _parse_compat_version(ver: str) -> tuple:
     return tuple(parts)
 
 
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except Exception:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-        raise
-
-
 def _environment_model_version(explicit: Optional[str]) -> Optional[str]:
     """Resolve an explicit API version before the process environment pin."""
     if explicit is not None:
@@ -162,17 +149,39 @@ def _environment_model_version(explicit: Optional[str]) -> Optional[str]:
     return validate_model_version(configured) if configured else None
 
 
-def _refresh_requested() -> bool:
-    """Return whether the caller explicitly requested a remote refresh."""
-    return os.environ.get("FLAGTUNE_MODEL_REFRESH", "").strip() == "1"
-
-
-def _package_is_valid(path: Path, platform_key: str, version: str) -> bool:
-    try:
-        read_platform_package(path, expected_platform_key=platform_key, expected_version=version)
-    except (OSError, ModelArchiveError):
+def _environment_switch(name: str) -> bool:
+    """Parse an explicit 0/1 environment switch and reject ambiguous values."""
+    value = os.environ.get(name, "").strip()
+    if value in ("", "0"):
         return False
-    return True
+    if value == "1":
+        return True
+    raise ValueError(f"{name} must be 0 or 1, got {value!r}")
+
+
+def _download_latest_requested() -> bool:
+    """Return whether Manifest-first highest-version selection is requested."""
+    return _environment_switch("FLAGTUNE_MODEL_DOWNLOAD_LATEST")
+
+
+def _remote_disabled() -> bool:
+    """Return whether package downloads are explicitly disabled."""
+    return _environment_switch("FLAGTUNE_DISABLE_REMOTE")
+
+
+class _HttpsOnlyRedirectHandler(HTTPRedirectHandler):
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlparse(newurl)
+        if parsed.scheme.lower() != "https" or not parsed.netloc:
+            raise HTTPError(newurl, code, "FlagTune redirects must remain HTTPS", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_https(request, *, timeout: int):
+    from urllib.request import build_opener
+
+    return build_opener(_HttpsOnlyRedirectHandler()).open(request, timeout=timeout)
 
 
 def _archive_sha256(path: Path) -> str:
@@ -356,6 +365,8 @@ class FlagTuneModelManager:
         model_version: Optional[str] = None,
     ) -> Path:
         """Return the selected outer platform package without extracting it."""
+        download_latest = _download_latest_requested()
+        remote_disabled = _remote_disabled()
         identity = ModelIdentity(platform_key, op_id, variant, dtype_key)
         requested = _environment_model_version(model_version)
 
@@ -367,49 +378,34 @@ class FlagTuneModelManager:
                 return user
 
         cache_root = _cache_root()
-        cached = self._select_cache_package(cache_root, identity.platform_key, requested)
-        refresh = _refresh_requested()
-        if cached is not None and not refresh:
-            logger.info("FlagTune platform package found in cache: %s", cached)
-            return cached
-
-        cached_version = self._package_version(cached, identity.platform_key) if cached is not None else None
-        cached_valid = (cached is not None and cached_version is not None
-                        and _package_is_valid(cached, identity.platform_key, cached_version))
-        if os.environ.get("FLAGTUNE_DISABLE_REMOTE"):
-            if cached_valid:
+        if requested is not None or not download_latest:
+            cached = self._select_cache_package(cache_root, identity.platform_key, requested)
+            if cached is not None:
+                logger.info("FlagTune platform package found in cache: %s", cached)
                 return cached
-        else:
-            from triton.flagtune.runtime.model_sources import resolve_package_info
+            if remote_disabled:
+                suffix = f" at version {requested!r}" if requested is not None else ""
+                raise FileNotFoundError(
+                    f"FlagTune package for platform {identity.platform_key!r}{suffix} is not cached and "
+                    "FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it")
 
-            remote = resolve_package_info(
+        from triton.flagtune.runtime.model_sources import resolve_package_info
+
+        package = resolve_package_info(
+            identity.platform_key,
+            version=requested,
+            generate_default=not remote_disabled,
+        )
+        if package is not None:
+            return self._download_package(
                 identity.platform_key,
-                version=requested,
-                force_refresh=refresh,
+                package,
+                remote_disabled=remote_disabled,
             )
-            if remote is not None and cached is not None and cached_version is not None:
-                cached_parsed = parse_model_version(cached_version)
-                remote_parsed = parse_model_version(remote.version)
-                if requested is None and cached_parsed.selection_key > remote_parsed.selection_key and cached_valid:
-                    return cached
-                if cached_parsed.selection_key == remote_parsed.selection_key:
-                    cached_digest = _archive_sha256(cached)
-                    if cached_digest != remote.sha256:
-                        raise IncompatibleModelError(f"immutable FlagTune package {identity.platform_key!r} version "
-                                                     f"{remote.version!r} changed SHA-256")
-                    if cached_valid:
-                        return cached
-            if remote is not None:
-                downloaded = self._download_package(identity.platform_key, remote)
-                if downloaded is not None:
-                    return downloaded
-            if cached_valid:
-                logger.warning("Using cached FlagTune platform package after refresh failure: %s", cached)
-                return cached
 
         suffix = f" at version {requested!r}" if requested is not None else ""
-        raise FileNotFoundError(f"FlagTune model not found for {identity.artifact_key!r}{suffix}. "
-                                f"Checked flat user packages, package cache ({cache_root}), and remote.")
+        raise FileNotFoundError(f"FlagTune Manifest has no package for platform {identity.platform_key!r}{suffix}; "
+                                f"checked flat user packages and package cache {cache_root} first")
 
     def _validate_flagtune_version(self, config: Dict[str, Any], source: str) -> None:
         min_ver = config.get("flagtune_version_min")
@@ -534,25 +530,60 @@ class FlagTuneModelManager:
                 f"{source}:{member}",
             )
 
-    def _download_package(self, platform_key: str, package: RemotePackage) -> Optional[Path]:
+    def _download_package(
+        self,
+        platform_key: str,
+        package: RemotePackage,
+        *,
+        remote_disabled: Optional[bool] = None,
+    ) -> Path:
+        if remote_disabled is None:
+            remote_disabled = _remote_disabled()
         parsed = urlparse(package.url)
         expected_name = platform_package_name(platform_key, package.version)
-        if parsed.scheme.lower() != "https" or not parsed.netloc or Path(parsed.path).name != expected_name:
-            logger.warning("FlagTune platform package URL is invalid: %s", package.url)
-            return None
+        if parsed.scheme.lower() != "https" or not parsed.netloc:
+            raise IncompatibleModelError(f"FlagTune platform package URL must use HTTPS: {package.url}")
         destination = _cache_root() / "packages" / platform_key / package.version / expected_name
         try:
-            from urllib.request import Request
+            if destination.is_symlink():
+                raise IncompatibleModelError(f"FlagTune package cache destination is a symlink: {destination}")
+            if destination.exists():
+                if not destination.is_file():
+                    raise IncompatibleModelError(f"FlagTune package cache destination is not a file: {destination}")
+                digest = _archive_sha256(destination)
+                if digest != package.sha256:
+                    raise IncompatibleModelError(
+                        f"immutable FlagTune package {platform_key!r} version {package.version!r} "
+                        "already exists with a different SHA-256")
+                package_key = (platform_key, package.version, digest)
+                if package_key not in self._packages:
+                    try:
+                        parsed_package = read_platform_package(
+                            destination,
+                            expected_platform_key=platform_key,
+                            expected_version=package.version,
+                        )
+                    except (OSError, ModelArchiveError) as exc:
+                        raise IncompatibleModelError(
+                            f"invalid cached FlagTune platform package at {destination}: {exc}") from exc
+                    self._validate_package_for_cache(parsed_package, str(destination))
+                    self._packages[package_key] = parsed_package
+                logger.info("FlagTune platform package already cached: %s", destination)
+                return destination
+            if remote_disabled:
+                raise FileNotFoundError(
+                    f"FlagTune package {platform_key!r} version {package.version!r} is not cached and "
+                    "FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it")
 
-            from triton.flagtune.runtime.model_sources import _open_https
+            from urllib.request import Request
 
             request = Request(package.url, headers={"User-Agent": f"FlagTune/{_FLAGTUNE_VERSION}"})
             with _open_https(request, timeout=120) as response:
                 payload = response.read()
             digest = hashlib.sha256(payload).hexdigest()
             if digest != package.sha256:
-                logger.warning("FlagTune platform package SHA-256 mismatch for %s", package.url)
-                return None
+                raise IncompatibleModelError(f"FlagTune platform package SHA-256 mismatch for {package.url}: "
+                                             f"expected {package.sha256}, got {digest}")
             try:
                 parsed_package = read_platform_package_bytes(
                     payload,
@@ -573,16 +604,11 @@ class FlagTuneModelManager:
             self._packages[(platform_key, package.version, digest)] = parsed_package
             logger.info("FlagTune platform package cached to %s", destination)
             return destination
-        except IncompatibleModelError:
+        except (FileNotFoundError, IncompatibleModelError, ValueError):
             raise
-        except Exception:
-            logger.warning(
-                "Failed to download FlagTune platform package for %s from %s",
-                platform_key,
-                package.url,
-                exc_info=True,
-            )
-            return None
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to download FlagTune platform package for {platform_key!r} from {package.url}") from exc
 
 
 class _XGBoostPredictorCompat:
