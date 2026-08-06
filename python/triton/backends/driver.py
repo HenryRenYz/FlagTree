@@ -31,6 +31,7 @@ class Benchmarker(Protocol):
         pass
 
 
+# flagtree flagtune: Describe backend-owned benchmark capabilities without exposing device APIs.
 @dataclass(frozen=True)
 class BenchmarkerCapability:
     """Describe one backend-owned benchmark implementation.
@@ -79,6 +80,7 @@ class DriverBase(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    # flagtree flagtune: Expose graph replay through the backend capability interface.
     def get_replay_benchmarker(self) -> Optional[BenchmarkerCapability]:
         """Return an optional capture/replay benchmark implementation.
 
