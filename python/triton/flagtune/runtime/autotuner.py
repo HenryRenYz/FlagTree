@@ -48,7 +48,7 @@ import warnings
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from triton.runtime.autotuner import Autotuner
-from triton.runtime.benchmark_protocol import BenchmarkMode, resolve_benchmarker
+from triton.flagtune.runtime.benchmark_protocol import BenchmarkMode, resolve_benchmarker
 
 logger = logging.getLogger(__name__)
 

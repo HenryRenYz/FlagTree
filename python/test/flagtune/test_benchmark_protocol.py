@@ -2,32 +2,25 @@ import inspect
 from types import SimpleNamespace
 
 import pytest
+import triton.testing as triton_testing
 
-from triton.backends.driver import BenchmarkerCapability
-from triton.runtime import benchmark_protocol as benchmark_module
+from triton.flagtune.runtime import benchmark_protocol as benchmark_module
 from triton.testing import do_bench_cudagraph
 
 
 class _FakeDriver:
 
-    def __init__(self, replay=True):
-        self.replay = replay
+    def __init__(self, backend="cuda"):
+        self.backend = backend
         self.observed = {}
 
-    def get_replay_benchmarker(self):
-        if not self.replay:
-            return None
+    def get_current_target(self):
+        return SimpleNamespace(backend=self.backend)
 
-        def benchmark(kernel_call, **kwargs):
-            self.observed = dict(kwargs)
-            kernel_call()
-            return [1.0, 0.8, 1.2]
-
-        return BenchmarkerCapability(
-            identifier="fake_command_replay_v1",
-            benchmarker=benchmark,
-            cache_policy="warm_cache",
-        )
+    def replay_benchmark(self, kernel_call, **kwargs):
+        self.observed = dict(kwargs)
+        kernel_call()
+        return [1.0, 0.8, 1.2]
 
     def get_benchmarker(self):
 
@@ -39,6 +32,11 @@ class _FakeDriver:
         return benchmark
 
 
+def _driver_for(module_name, backend):
+    driver_type = type("FakeDriver", (_FakeDriver, ), {"__module__": module_name})
+    return driver_type(backend)
+
+
 def test_cudagraph_helper_keeps_ten_retries_as_compatible_default():
     """Expose the old hard-coded retry count as an optional final argument."""
     parameter = inspect.signature(do_bench_cudagraph).parameters["n_retries"]
@@ -47,9 +45,25 @@ def test_cudagraph_helper_keeps_ten_retries_as_compatible_default():
     assert list(inspect.signature(do_bench_cudagraph).parameters)[-1] == "n_retries"
 
 
-def test_replay_splits_total_measurement_budget(monkeypatch):
-    active = _FakeDriver()
+@pytest.mark.parametrize(
+    ("module_name", "backend", "implementation"),
+    [
+        (
+            "triton.backends.nvidia.driver",
+            "cuda",
+            "triton_cuda_graph_replay_v1",
+        ),
+        (
+            "triton.backends.amd.driver",
+            "hip",
+            "triton_hip_graph_replay_v1",
+        ),
+    ],
+)
+def test_replay_splits_total_measurement_budget(monkeypatch, module_name, backend, implementation):
+    active = _driver_for(module_name, backend)
     monkeypatch.setattr(benchmark_module, "driver", SimpleNamespace(active=active))
+    monkeypatch.setattr(triton_testing, "do_bench_cudagraph", active.replay_benchmark)
     launches = []
 
     resolved = benchmark_module.resolve_benchmarker(
@@ -70,18 +84,26 @@ def test_replay_splits_total_measurement_budget(monkeypatch):
     assert resolved.protocol.as_dict() == {
         "requested_mode": "replay",
         "resolved_mode": "replay",
-        "implementation": "fake_command_replay_v1",
-        "cache_policy": "warm_cache",
+        "implementation": implementation,
+        "cache_policy": "warm_l2",
         "warmup_ms": 25,
         "measurement_ms": 100,
         "n_retries": 10,
         "per_replay_ms": 10.0,
         "fallback_reason": None,
     }
+    assert resolved.protocol.cache_key() == (
+        implementation,
+        25,
+        100,
+        10,
+        10.0,
+    )
 
 
-def test_missing_replay_capability_warns_and_resolves_event(monkeypatch):
-    active = _FakeDriver(replay=False)
+def test_unsupported_replay_backend_warns_and_resolves_event(monkeypatch):
+    # HCU exposes a HIP target but does not use AMD's graph replay implementation.
+    active = _driver_for("triton.backends.hcu.driver", backend="hip")
     monkeypatch.setattr(benchmark_module, "driver", SimpleNamespace(active=active))
 
     with pytest.warns(RuntimeWarning, match="falling back to event"):

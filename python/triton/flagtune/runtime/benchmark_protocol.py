@@ -19,12 +19,11 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-"""Resolve backend-owned event and capture/replay benchmark protocols.
+"""Resolve event and graph-replay benchmark protocols.
 
-This module is intentionally architecture neutral.  Callers request an
-``event`` or ``replay`` measurement and receive a callable plus complete
-protocol metadata.  Device drivers own the implementation of graph capture,
-command buffers, streams, events, and any future equivalent mechanism.
+Callers request an ``event`` or ``replay`` measurement and receive a callable
+plus complete protocol metadata. Replay support is selected here by Triton
+driver module name so backend driver implementations remain unchanged.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Sequence
 
-from .driver import driver
+from triton.runtime.driver import driver
 
 
 class BenchmarkMode(str, Enum):
@@ -94,6 +93,17 @@ class ResolvedBenchmarker:
     benchmark: Callable[[Callable[..., Any], Sequence[float]], Sequence[float]]
 
 
+_REPLAY_IMPLEMENTATIONS = {
+    "triton.backends.nvidia.driver": "triton_cuda_graph_replay_v1",
+    "triton.backends.amd.driver": "triton_hip_graph_replay_v1",
+}
+
+
+def _replay_implementation(active: Any) -> str | None:
+    """Return the stable replay identity for a supported Triton driver."""
+    return _REPLAY_IMPLEMENTATIONS.get(type(active).__module__)
+
+
 def _validate_request(
     mode: BenchmarkMode | str,
     warmup_ms: int,
@@ -121,7 +131,7 @@ def resolve_benchmarker(
     n_retries: int = 10,
     allow_fallback: bool = True,
 ) -> ResolvedBenchmarker:
-    """Resolve one backend-owned benchmarker without exposing device APIs.
+    """Resolve one Triton benchmarker without exposing device APIs.
 
     ``measurement_ms`` is a total timing budget.  Replay implementations
     receive ``measurement_ms / n_retries`` as their per-graph ``rep`` value so
@@ -131,12 +141,13 @@ def resolve_benchmarker(
     selected = _validate_request(mode, warmup_ms, measurement_ms, n_retries)
     active = driver.active
     if selected is BenchmarkMode.REPLAY:
-        capability = active.get_replay_benchmarker()
-        if capability is not None:
+        implementation = _replay_implementation(active)
+        if implementation is not None:
             per_replay_ms = float(measurement_ms) / n_retries
+            from triton.testing import do_bench_cudagraph
 
             def replay_benchmark(kernel_call, quantiles):
-                return capability.benchmarker(
+                return do_bench_cudagraph(
                     kernel_call,
                     rep=per_replay_ms,
                     quantiles=quantiles,
@@ -147,8 +158,8 @@ def resolve_benchmarker(
                 protocol=BenchmarkProtocol(
                     requested_mode=selected,
                     resolved_mode=BenchmarkMode.REPLAY,
-                    implementation=capability.identifier,
-                    cache_policy=capability.cache_policy,
+                    implementation=implementation,
+                    cache_policy="warm_l2",
                     warmup_ms=warmup_ms,
                     measurement_ms=measurement_ms,
                     n_retries=n_retries,
