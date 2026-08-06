@@ -18,7 +18,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-name: CD-Mthreads3.6
+name: CD-Ppu3.6
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ on:
         default: '0.6.0'
       PYTHON_VER:
         required: true
-        default: '3.10'
+        default: '3.12'
       PLATFORM:
         required: true
         default: 'x86_64'
@@ -44,7 +44,7 @@ on:
         default: '3.6'
       BACKEND:
         required: true
-        default: 'mthreads'
+        default: 'ppu'
       FLAGTREE_PYPI_KEY:
         required: false
   workflow_call:
@@ -56,7 +56,7 @@ on:
       PYTHON_VER:
         type: string
         required: true
-        default: '3.10'
+        default: '3.12'
       PLATFORM:
         type: string
         required: true
@@ -72,7 +72,7 @@ on:
       BACKEND:
         type: string
         required: true
-        default: 'mthreads'
+        default: 'ppu'
       FLAGTREE_PYPI_KEY:
         type: string
         required: false
@@ -83,7 +83,7 @@ concurrency:
 
 jobs:
   delivery:
-    runs-on: mthreads3.6-cd
+    runs-on: ppu3.6-cd
     if: ${{ github.repository == 'FlagTree/flagtree' || github.repository == 'flagos-ai/flagtree' }}
     steps:
       - name: Check branch
