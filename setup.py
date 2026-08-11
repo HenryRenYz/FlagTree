@@ -1017,6 +1017,11 @@ setup(
             "GitPython",
             "lit",
         ],
+        "flagtune": [
+            "numpy>=1.26.4,<2.0",
+            "scikit-learn>=1.4,<2.0",
+            "xgboost==3.3.0",
+        ],
         "tests": [
             "autopep8",
             "isort",
