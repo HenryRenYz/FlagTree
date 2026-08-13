@@ -54,7 +54,8 @@ class DeviceDescriptor:
     """Describe one active accelerator without exposing a vendor API object.
 
     Args:
-        backend: Triton's canonical backend name, such as ``cuda`` or ``hip``.
+        backend: Triton's canonical backend name, such as ``cuda``, ``hip``,
+            or ``maca``.
         vendor: Stable hardware-vendor name used in artifact identities.
         torch_device_type: Device type accepted by the installed PyTorch build.
             ROCm intentionally uses ``cuda`` here for PyTorch compatibility.
@@ -96,6 +97,19 @@ def _amd_architecture(value: Any) -> str:
     return text
 
 
+def _maca_architecture(value: Any) -> str:
+    text = str(value).strip().lower()
+    if text.startswith("sm"):
+        suffix = text[2:].replace("_", "")
+    else:
+        suffix = text.replace(".", "").replace("_", "")
+    if not suffix.isdigit():
+        raise DeviceProbeError(
+            f"MACA target has invalid architecture {value!r}; expected smNN or NN"
+        )
+    return f"sm{suffix}"
+
+
 # ---------------------------------------------------------------------------
 # Supported backend descriptors
 # TODO add more backends here (ascend, mthreads, hygon, etc.)
@@ -104,6 +118,8 @@ _BACKENDS: Dict[str, _BackendDescriptor] = {
     "cuda": _BackendDescriptor("nvidia", "cuda", _nvidia_architecture),
     # PyTorch ROCm deliberately exposes its runtime through torch.cuda.
     "hip": _BackendDescriptor("amd", "cuda", _amd_architecture),
+    # MetaX MACA also exposes its runtime through torch.cuda.
+    "maca": _BackendDescriptor("metax", "cuda", _maca_architecture),
 }
 
 

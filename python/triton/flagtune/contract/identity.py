@@ -134,7 +134,7 @@ def make_dtype_key(dtypes: Iterable[Any]) -> str:
 
 def normalize_device_name(value: str) -> str:
     tokens = re.findall(r"[a-z0-9]+", str(value).lower())
-    while tokens and tokens[0] in ("nvidia", "amd", "intel"):
+    while tokens and tokens[0] in ("nvidia", "amd", "intel", "metax"):
         tokens.pop(0)
     if not tokens:
         raise ModelIdentityError(f"GPU device name has no usable tokens: {value!r}")

@@ -71,13 +71,30 @@ def test_probe_hip_preserves_gfx_architecture(monkeypatch):
     assert descriptor.architecture == "gfx942"
 
 
+def test_probe_maca_uses_metax_runtime_contract(monkeypatch):
+    from triton.flagtune.runtime import device
+
+    monkeypatch.setattr(
+        device,
+        "_active_driver",
+        lambda: _FakeActive("maca", 80, ("MetaX C550", )),
+    )
+    descriptor = probe_flagtune_device()
+
+    assert descriptor.backend == "maca"
+    assert descriptor.vendor == "metax"
+    assert descriptor.torch_device_type == "cuda"
+    assert descriptor.device_name == "MetaX C550"
+    assert descriptor.architecture == "sm80"
+
+
 def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
     from triton.flagtune.runtime import device
 
     monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("xpu", "pvc"))
     with pytest.raises(
-            UnsupportedFlagTuneDeviceError,
-            match="does not support Triton backend 'xpu'.*cuda, hip",
+        UnsupportedFlagTuneDeviceError,
+        match="does not support Triton backend 'xpu'.*cuda, hip, maca",
     ):
         probe_flagtune_device()
 
