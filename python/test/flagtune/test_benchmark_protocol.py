@@ -58,6 +58,11 @@ def test_cudagraph_helper_keeps_ten_retries_as_compatible_default():
             "hip",
             "triton_hip_graph_replay_v1",
         ),
+        (
+            "triton.backends.metax.driver",
+            "maca",
+            "triton_metax_graph_replay_v1",
+        ),
     ],
 )
 def test_replay_splits_total_measurement_budget(monkeypatch, module_name, backend, implementation):
