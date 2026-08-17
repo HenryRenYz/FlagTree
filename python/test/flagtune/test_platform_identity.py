@@ -43,6 +43,18 @@ def test_metax_product_name_does_not_duplicate_vendor_in_platform_key():
     assert make_platform_key("MetaX", "MetaX C550") == "metax-c550"
 
 
+def test_ppu_product_name_uses_thead_platform_key():
+    assert make_platform_key("T-Head", "PPU-ZW810E") == "thead-zw810e"
+
+
+def test_mthreads_product_name_does_not_duplicate_vendor_in_platform_key():
+    assert make_platform_key("MThreads", "MTT S5000") == "mthreads-s5000"
+
+
+def test_hygon_product_name_does_not_duplicate_vendor_in_platform_key():
+    assert make_platform_key("Hygon", "Hygon BW") == "hygon-bw"
+
+
 def test_model_config_accepts_metax_maca_backend():
     config = _model_config(
         platform_key="metax-c550",
@@ -52,6 +64,21 @@ def test_model_config_accepts_metax_maca_backend():
             "device_name": "MetaX C550",
             "architecture": "sm80",
             "platform_key": "metax-c550",
+        },
+    )
+
+    assert parse_model_config(config).op_id == "flaggems/mm"
+
+
+def test_model_config_accepts_mthreads_musa_backend():
+    config = _model_config(
+        platform_key="mthreads-s5000",
+        gpu={
+            "backend": "musa",
+            "vendor": "mthreads",
+            "device_name": "MTT S5000",
+            "architecture": "musa31",
+            "platform_key": "mthreads-s5000",
         },
     )
 
