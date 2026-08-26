@@ -19,9 +19,11 @@
 # SOFTWARE.
 
 # flagtree tle
+from __future__ import annotations
+
 import builtins
 import triton.language.core as tl
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TYPE_CHECKING
 from enum import Enum
 from . import types as tle
 from .mthreads import common as mthreads_common
@@ -39,6 +41,9 @@ from triton.language.core import (
     range as _tl_range,
 )
 
+if TYPE_CHECKING:
+    from .. import TLESemantic
+
 # Address space 3 matches the shared-memory space used in TritonGPU lowering.
 SHARED_MEMORY_ADDRESS_SPACE = 3
 
@@ -46,7 +51,7 @@ _WGMMA_PIPELINE_MODE_ATTR = "tle.wgmma_pipeline_mode"
 _WGMMA_PIPELINE_MODE_USER_PROMISE = "user_promise"
 
 
-def _mark_wgmma_user_promise(_semantic, _generator):
+def _mark_wgmma_user_promise(_semantic: TLESemantic | None, _generator):
     if _generator is None or _semantic is None:
         return
     # This module attribute is NVIDIA-specific and must not leak into mthreads IR.
@@ -78,6 +83,34 @@ class pipeline(range):
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
         super().__init__(arg1, arg2, step, num_stages, loop_unroll_factor)
+
+
+@tl.builtin
+def set_layout(value, layout, _semantic=None):
+    """tle.gpu.set_layout op"""
+    layout = tl._unwrap_if_constexpr(layout)
+    if not hasattr(layout, "to_ir"):
+        raise ValueError(f"tle.gpu.set_layout expects a layout with to_ir(), got {type(layout)}")
+    if not isinstance(value, tl.tensor):
+        value = _semantic.to_tensor(value)
+    if not value.type.is_block():
+        raise ValueError("tle.gpu.set_layout only supports block tensors")
+    if not hasattr(_semantic.builder, "ensure_ttg_layout_attrs"):
+        raise RuntimeError("tle.gpu.set_layout requires a Triton build with __TLE__ explicit "
+                           "layout support (ir.builder.ensure_ttg_layout_attrs is missing). "
+                           "This backend likely uses its own TLE variant "
+                           "(e.g. __ILUVATAR_TLE__/__MCTLE__) that does not implement this op.")
+    options = _semantic.builder.options
+    _semantic.builder.ensure_ttg_layout_attrs(
+        int(getattr(options, "num_warps")),
+        int(getattr(options, "warp_size", 32)),
+        int(getattr(options, "num_ctas", 1)),
+    )
+    target_encoding = layout.to_ir(_semantic.builder)
+    return tl.tensor(
+        _semantic.builder.create_tle_gpu_set_layout(value.handle, target_encoding),
+        value.type,
+    )
 
 
 class range(_tl_range):
@@ -181,7 +214,8 @@ def _deduplicate_warp_specialize_captures(worker_items):
 
 
 @tl.builtin
-def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic: TLESemantic | None = None,
+                    _generator=None):
     """
     Create an explicit GPU warp-specialized region.
 
@@ -274,7 +308,7 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _sema
 
 
 @tl.builtin
-def memory_space(input, space, _builder=None, _semantic=None):
+def memory_space(input, space, _builder=None, _semantic: TLESemantic | None = None):
     '''
     Assign a memory space to the tensor :code:`input`.
 
@@ -295,8 +329,10 @@ def alloc(
     layout: Optional[tle.shared_layout] = None,
     scope: tle.scope = tle.smem,
     init_value: Optional[tl.tensor] = None,
+    alias: Optional[tle.buffered_tensor] = None,
+    alias_offset_bytes: int = 0,
     nv_mma_shared_layout=True,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
 ) -> tle.buffered_tensor:
     """
     Allocate local memory buffer
@@ -306,6 +342,9 @@ def alloc(
         dtype: Data type
         layout: Memory layout encoding (optional)
         scope: Storage type (default to shared memory)
+        init_value: Optional initial register tensor for a new allocation
+        alias: Optional source shared-memory buffer to alias instead of allocating
+        alias_offset_bytes: Static byte offset from alias source view base
         nv_mma_shared_layout: Select an MMA-consumer-defined shared layout when
             ``layout`` is None. On mthreads this is materialized by the SQMMA
             lowering rather than as an NVIDIA encoding.
@@ -331,6 +370,20 @@ def alloc(
 
     if not isinstance(scope, tle.scope):
         raise ValueError(f"Storage type must be tle.scope, but got {type(scope)}")
+
+    alias = tl._unwrap_if_constexpr(alias)
+    alias_offset_bytes = tl._unwrap_if_constexpr(alias_offset_bytes)
+    if alias is not None:
+        if init_value is not None:
+            raise ValueError("alloc alias mode cannot be combined with init_value")
+        if not isinstance(alias, tle.buffered_tensor):
+            raise ValueError(f"alias must be a tle.buffered_tensor, but got {type(alias)}")
+        if scope is not tle.smem or alias.type.storage is not tle.smem:
+            raise ValueError("alloc alias mode currently supports only smem buffers")
+        if isinstance(alias_offset_bytes, bool) or not isinstance(alias_offset_bytes, int):
+            raise ValueError("alias_offset_bytes must be a compile-time integer")
+        if alias_offset_bytes < 0:
+            raise ValueError("alias_offset_bytes must be non-negative")
 
     layout = tl._unwrap_if_constexpr(layout)
     if layout is not None and not isinstance(layout, tle.shared_layout):
@@ -405,12 +458,15 @@ def alloc(
             layout_handle = layout.to_ir(_semantic.builder)
 
         if storage == tle.smem:
-            if init_value is not None:
+            if alias is not None:
+                alias_ty = _semantic.builder.get_memdesc_type(full_shape, elem_type, layout_handle, "smem")
+                tensor_handle = _semantic.builder.create_memdesc_alias(alias_ty, alias.handle, alias_offset_bytes)
+            elif init_value is not None:
                 mutable_ty = _semantic.builder.get_memdesc_type(full_shape, elem_type, layout_handle, "smem")
                 tensor_handle = _semantic.builder.create_local_alloc(mutable_ty, init_value.handle)
             else:
                 tensor_handle = _semantic.builder.create_local_alloc(full_shape, elem_type, layout_handle)
-            if mthreads_auto_sqmma_shared_layout:
+            if mthreads_auto_sqmma_shared_layout and alias is None:
                 mthreads_wgmma.mark_auto_shared_layout(_semantic.builder, tensor_handle)
         else:
             raise ValueError(f"Storage type {storage} not yet supported")
@@ -461,7 +517,7 @@ def _normalize_barrier_init(init) -> str:
 _FIRST_VIRTUAL_NAMED_BARRIER_ID = 16
 
 
-def _reserve_named_barrier_ids(_semantic, count: int) -> int:
+def _reserve_named_barrier_ids(_semantic: TLESemantic | None, count: int) -> int:
     next_id = getattr(_semantic, "_tle_next_named_barrier_id", _FIRST_VIRTUAL_NAMED_BARRIER_ID)
     last_id = next_id + count - 1
     setattr(_semantic, "_tle_next_named_barrier_id", last_id + 1)
@@ -476,7 +532,7 @@ def _barrier_handle_key(handle):
         return id(handle)
 
 
-def _ensure_named_barrier_ids(slot: tle.barrier, _semantic) -> None:
+def _ensure_named_barrier_ids(slot: tle.barrier, _semantic: TLESemantic | None) -> None:
     if slot.named_base_id > 0:
         return
     key = slot.allocation_key
@@ -494,7 +550,7 @@ def _ensure_named_barrier_ids(slot: tle.barrier, _semantic) -> None:
     slot.type.named_base_id = base_id
 
 
-def _barrier_phase_tensor(phaseIdx, init: str, _semantic) -> tl.tensor:
+def _barrier_phase_tensor(phaseIdx, init: str, _semantic: TLESemantic | None) -> tl.tensor:
     init_polarity = 1 if init == tle.READY else 0
     raw_phase = _unwrap_barrier_constexpr(phaseIdx)
     if isinstance(raw_phase, int):
@@ -513,7 +569,7 @@ def _barrier_phase_tensor(phaseIdx, init: str, _semantic) -> tl.tensor:
     return phase
 
 
-def _barrier_slot(value: tle.barrier, _semantic) -> tle.barrier:
+def _barrier_slot(value: tle.barrier, _semantic: TLESemantic | None) -> tle.barrier:
     if not isinstance(value, tle.barrier):
         raise ValueError(f"barrier operation expects tle.gpu barrier, got {type(value).__name__}")
     if value.is_slot:
@@ -521,7 +577,7 @@ def _barrier_slot(value: tle.barrier, _semantic) -> tle.barrier:
     return value.__getitem__(0, _semantic=_semantic)
 
 
-def _record_barrier_backend(slot: tle.barrier, backend: str, _semantic) -> None:
+def _record_barrier_backend(slot: tle.barrier, backend: str, _semantic: TLESemantic | None) -> None:
     if slot.allocation_key is not None and slot.static_index is not None:
         key = (slot.allocation_key, slot.static_index)
     elif slot.named_base_id > 0 and slot.static_index is not None:
@@ -538,7 +594,7 @@ def _record_barrier_backend(slot: tle.barrier, backend: str, _semantic) -> None:
     uses[key] = backend
 
 
-def _tma_completion_barrier_slot(value, _semantic) -> tle.barrier:
+def _tma_completion_barrier_slot(value, _semantic: TLESemantic | None) -> tle.barrier:
     if not isinstance(value, tle.barrier):
         raise ValueError(f"TMA copy barrier expects tle.gpu barrier, got {type(value).__name__}")
     if not value.is_slot and value.num_barriers != 1:
@@ -560,7 +616,7 @@ def alloc_barriers(
     arrive_count=1,
     init=tle.PENDING,
     expect_bytes=None,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
     _generator=None,
 ) -> tle.barrier:
     """Allocate a TLE GPU barrier array."""
@@ -603,7 +659,7 @@ def alloc_barrier(
     arrive_count=1,
     init=tle.PENDING,
     expect_bytes=None,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
     _generator=None,
 ) -> tle.barrier:
     """Allocate a single TLE GPU barrier."""
@@ -618,7 +674,7 @@ def alloc_barrier(
 
 
 @tl.builtin
-def barrier_wait(barr, phaseIdx=None, _semantic=None) -> None:
+def barrier_wait(barr, phaseIdx=None, _semantic: TLESemantic | None = None) -> None:
     """Wait on a TLE GPU barrier slot."""
     slot = _barrier_slot(barr, _semantic)
     if phaseIdx is None:
@@ -640,7 +696,7 @@ def barrier_wait(barr, phaseIdx=None, _semantic=None) -> None:
 
 
 @tl.builtin
-def barrier_arrive(barr, arrive_count=1, phaseIdx=None, _semantic=None) -> None:
+def barrier_arrive(barr, arrive_count=1, phaseIdx=None, _semantic: TLESemantic | None = None) -> None:
     """Arrive on a TLE GPU barrier slot."""
     slot = _barrier_slot(barr, _semantic)
     arrive_count = _require_barrier_int(arrive_count, "arrive_count")
@@ -707,7 +763,8 @@ def _require_transpose_order(order, rank: int, name: str):
         raise ValueError(f"{name} transpose order must be a permutation of rank {rank}")
 
 
-def _transpose_wgmma_smem_operand(value: tle.buffered_tensor, name: str, _semantic) -> tle.buffered_tensor:
+def _transpose_wgmma_smem_operand(value: tle.buffered_tensor, name: str,
+                                  _semantic: TLESemantic | None) -> tle.buffered_tensor:
     _require_rank2_wgmma_operand(value, name)
     order = [1, 0]
     _require_transpose_order(order, len(value.type.shape), name)
@@ -737,7 +794,7 @@ _WGMMA_ALLOWED_OPERAND_TYPE_PAIRS = (
 )
 
 
-def _canonicalize_wgmma_operands(a, b, trans_a: bool, trans_b: bool, _semantic):
+def _canonicalize_wgmma_operands(a, b, trans_a: bool, trans_b: bool, _semantic: TLESemantic | None):
     a = tl._unwrap_if_constexpr(a)
     b = tl._unwrap_if_constexpr(b)
 
@@ -795,7 +852,7 @@ def wgmma(
     out_dtype=tl.float32,
     trans_a: tl.constexpr = False,
     trans_b: tl.constexpr = False,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
 ) -> tl.tensor:
     """
     Issue an asynchronous Hopper WGMMA.
@@ -813,7 +870,7 @@ def wgmma(
     trans_b = _require_wgmma_bool(trans_b, "trans_b")
     mthreads_enabled = mthreads_common.enabled()
     if mthreads_enabled:
-        mthreads_wgmma.validate_operands(a, b, acc, trans_a, trans_b)
+        a, b = mthreads_wgmma.prepare_operands(a, b, acc, trans_a, trans_b, _semantic)
     else:
         a, b = _canonicalize_wgmma_operands(a, b, trans_a, trans_b, _semantic)
 
@@ -890,7 +947,7 @@ def wgmma(
 
 
 @tl.builtin
-def wgmma_wait(pendings, acc=None, _semantic=None, _generator=None) -> tl.tensor:
+def wgmma_wait(pendings, acc=None, _semantic: TLESemantic | None = None, _generator=None) -> tl.tensor:
     """Wait until ``pendings`` or fewer async WGMMA groups remain outstanding."""
     _mark_wgmma_user_promise(_semantic, _generator)
     if acc is None and isinstance(pendings, tl.tensor):
@@ -920,7 +977,7 @@ def copy(
     shape,
     offsets: Sequence[constexpr | tensor] = None,
     barrier=None,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
 ) -> None:
     """
     High-performance data copy operation supporting TMA (Tensor Memory Accelerator) transfers.
@@ -979,7 +1036,7 @@ def copy(
         dst: tle.buffered_tensor,
         shape: tuple,
         direction,
-        _semantic=None,
+        _semantic: TLESemantic | None = None,
     ) -> None:
         if mthreads_enabled:
             mthreads_copy.validate_normal_copy(src, dst, shape, direction)
@@ -1031,7 +1088,7 @@ def copy(
         shape: tuple,
         offsets: Sequence[constexpr | tensor],
         barrier=None,
-        _semantic=None,
+        _semantic: TLESemantic | None = None,
     ) -> None:
         # Parameter validation
         valid_types = (tle.buffered_tensor, tl.tensor_descriptor)
@@ -1138,7 +1195,8 @@ def copy(
         return tmacopy(src, dst, direction, shape, offsets, barrier, _semantic)
 
 
-def _expand_index_to_shape(index: tl.tensor, shape: Sequence[int], axis: int, _semantic) -> tl.tensor:
+def _expand_index_to_shape(index: tl.tensor, shape: Sequence[int], axis: int,
+                           _semantic: TLESemantic | None) -> tl.tensor:
     idx = index
     for _ in builtins.range(axis):
         idx = tl.expand_dims(idx, 0, _semantic=_semantic)
@@ -1147,7 +1205,7 @@ def _expand_index_to_shape(index: tl.tensor, shape: Sequence[int], axis: int, _s
     return tl.broadcast_to(idx, *shape, _semantic=_semantic)
 
 
-def _make_full_indices(buffer: tle.buffered_tensor, _semantic) -> tuple[tl.tensor, ...]:
+def _make_full_indices(buffer: tle.buffered_tensor, _semantic: TLESemantic | None) -> tuple[tl.tensor, ...]:
     shape = tuple(int(tl._unwrap_if_constexpr(dim)) for dim in buffer.type.shape)
     indices = []
     for axis, dim in enumerate(shape):
@@ -1161,7 +1219,7 @@ def _make_full_indices(buffer: tle.buffered_tensor, _semantic) -> tuple[tl.tenso
 def local_ptr(
     buffer: tle.buffered_tensor,
     indices: Optional[Sequence] = None,
-    _semantic=None,
+    _semantic: TLESemantic | None = None,
     _generator=None,
 ) -> tl.tensor:
     """
