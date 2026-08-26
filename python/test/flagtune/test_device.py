@@ -158,8 +158,8 @@ def test_probe_unknown_backend_fails_at_device_boundary(monkeypatch):
 
     monkeypatch.setattr(device, "_active_driver", lambda: _FakeActive("xpu", "pvc"))
     with pytest.raises(
-        UnsupportedFlagTuneDeviceError,
-        match="does not support Triton backend 'xpu'.*cuda, hip, maca, musa",
+            UnsupportedFlagTuneDeviceError,
+            match="does not support Triton backend 'xpu'.*cuda, hip, maca, musa",
     ):
         probe_flagtune_device()
 

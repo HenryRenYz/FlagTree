@@ -65,6 +65,7 @@ def test_musa_graph_helper_uses_supplied_device_interface():
             return 5.0
 
     class _Graph:
+
         def replay(self):
             observed["replays"] += 1
 
@@ -78,6 +79,7 @@ def test_musa_graph_helper_uses_supplied_device_interface():
 
         @staticmethod
         def graph(_graph):
+
             class _Capture:
 
                 def __enter__(self):

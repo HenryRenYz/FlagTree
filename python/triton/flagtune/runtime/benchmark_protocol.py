@@ -151,8 +151,7 @@ def resolve_benchmarker(
 
             if type(active).__module__ == "triton.backends.mthreads.driver":
                 from triton.flagtune.runtime.graph_benchmark import (
-                    do_bench_musa_graph,
-                )
+                    do_bench_musa_graph, )
 
                 def replay_benchmark(kernel_call, quantiles):
                     return do_bench_musa_graph(

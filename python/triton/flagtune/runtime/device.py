@@ -104,9 +104,7 @@ def _maca_architecture(value: Any) -> str:
     else:
         suffix = text.replace(".", "").replace("_", "")
     if not suffix.isdigit():
-        raise DeviceProbeError(
-            f"MACA target has invalid architecture {value!r}; expected smNN or NN"
-        )
+        raise DeviceProbeError(f"MACA target has invalid architecture {value!r}; expected smNN or NN")
     return f"sm{suffix}"
 
 
@@ -117,9 +115,7 @@ def _musa_architecture(value: Any) -> str:
     else:
         suffix = text.replace(".", "").replace("_", "")
     if not suffix.isdigit():
-        raise DeviceProbeError(
-            f"MUSA target has invalid architecture {value!r}; expected musaNN or NN"
-        )
+        raise DeviceProbeError(f"MUSA target has invalid architecture {value!r}; expected musaNN or NN")
     return f"musa{suffix}"
 
 
@@ -140,13 +136,9 @@ _BACKENDS: Dict[str, _BackendDescriptor] = {
 # another implementation. Resolve those drivers before the target fallback so
 # PPU and Hygon hardware retain their own stable vendor identities.
 _DRIVER_OVERRIDES: Dict[str, _BackendDescriptor] = {
-    "triton.backends.ppu.driver": _BackendDescriptor(
-        "thead", "cuda", _nvidia_architecture
-    ),
+    "triton.backends.ppu.driver": _BackendDescriptor("thead", "cuda", _nvidia_architecture),
     # Hygon HCU exposes Triton's canonical HIP target but is not an AMD device.
-    "triton.backends.hcu.driver": _BackendDescriptor(
-        "hygon", "cuda", _amd_architecture
-    ),
+    "triton.backends.hcu.driver": _BackendDescriptor("hygon", "cuda", _amd_architecture),
 }
 
 
