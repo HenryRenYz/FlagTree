@@ -18,32 +18,26 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from pathlib import Path
+TLE_PRIMITIVES = frozenset({
+    ## TLE-Raw
+    "raw.call", "raw.call_smem",
 
+    ## TLE-Lite
+    "load", "extract_tile", "insert_tile", "range", "device_mesh", "sharding", "shard_id", "distributed_barrier",
+    "remote", "cumsum", "pipe", "pipe.reader", "pipe.reader.wait", "pipe.reader.release", "pipe.writer",
+    "pipe.writer.acquire", "pipe.writer.commit", "pipe.writer.close",
 
-def _read_flagtree_backend() -> str:
-    backend_file = Path(__file__).parent / "FLAGTREE_BACKEND"
-    try:
-        return backend_file.read_text().strip()
-    except (FileNotFoundError, IOError):
-        return ""
+    # TLE-Lite: tileir view
+    "create_mem_token", "join_mem_tokens", "load_view_tko", "store_view_tko",
 
+    # TLE-Lite: tileir token/tko
+    "dim", "make_tensor_view", "make_partition_view", "make_view",
 
-FLAGTREE_BACKEND: str = _read_flagtree_backend()
+    ## TLE-Struct GPU
+    "gpu.alloc", "gpu.copy", "gpu.local_ptr", "gpu.memory_space", "gpu.set_layout", "gpu.warp_specialize",
+    "gpu.alloc_barrier", "gpu.alloc_barriers", "gpu.barrier_wait", "gpu.barrier_arrive", "gpu.wgmma", "gpu.wgmma_wait",
+    "gpu.buffered_tensor.slot", "gpu.range",  # TODO: del
+    "gpu.pipeline",  # TODO: del
+})
 
-
-def get_active_backend_name() -> str:
-    """Return the configured FlagTree backend, or detect the default GPU backend."""
-    if FLAGTREE_BACKEND:
-        return FLAGTREE_BACKEND
-
-    from triton.backends import backends
-
-    active = [
-        backend_name for backend_name in ("nvidia", "amd")
-        if backend_name in backends and backends[backend_name].driver.is_active()
-    ]
-    if len(active) != 1 or not active[0]:
-        raise RuntimeError(f"FLAGTREE_BACKEND is empty, but expected exactly one active default backend; "
-                           f"found {active or 'none'}")
-    return active[0]
+__all__ = ["TLE_PRIMITIVES"]
