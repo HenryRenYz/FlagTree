@@ -159,6 +159,7 @@ def resolve_benchmarker(
                         rep=per_replay_ms,
                         quantiles=quantiles,
                         n_retries=n_retries,
+                        warmup_ms=warmup_ms,
                         device_interface=active.get_device_interface(),
                     )
 

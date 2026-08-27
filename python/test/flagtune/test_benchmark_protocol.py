@@ -106,8 +106,13 @@ def test_musa_graph_helper_uses_supplied_device_interface():
         device_interface=_Interface(),
     )
 
-    assert result == 5.0
-    assert observed == {"captures": 1, "replays": 2, "synchronizes": 4}
+    # n_repeat is now calibrated from a 256-iteration probe graph instead of
+    # five eager calls, so the fake 5.0ms elapsed time reads as 5.0/256 per
+    # iteration and sizes the timing graph at int(rep / that) == 51.
+    assert result == pytest.approx(5.0 / 51)
+    # one probe capture plus the timing capture; three probe replays plus
+    # n_retries timed replays; one synchronize after each capture and replay.
+    assert observed == {"captures": 2, "replays": 5, "synchronizes": 7}
 
 
 @pytest.mark.parametrize(
@@ -205,6 +210,7 @@ def test_mthreads_replay_uses_flagtune_musa_graph_helper(monkeypatch):
         "rep": 10.0,
         "quantiles": (0.5, 0.2, 0.8),
         "n_retries": 10,
+        "warmup_ms": 25,
         "device_interface": active.device_interface,
     }
     assert resolved.protocol.as_dict() == {
