@@ -19,8 +19,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-"""Backend-specific graph benchmark helpers owned by FlagTune."""
-
 from __future__ import annotations
 
 import time
@@ -28,12 +26,6 @@ from typing import Any, Callable, Sequence
 
 
 def _timed_warmup(fn: Callable[[], Any], warmup_ms: float, device_interface: Any) -> None:
-    """Drive ``fn`` for ``warmup_ms`` of wall time before anything is timed.
-
-    The replay path previously relied on one call plus the five estimate calls,
-    which is far too little to leave a small kernel's clocks in a steady state.
-    Callers already supply a warmup budget; honour it.
-    """
     if warmup_ms <= 0:
         return
     device_interface.synchronize()
@@ -52,17 +44,6 @@ def _calibrate_n_repeat(
     probe_iters: int = 256,
     max_n_repeat: int = 20000,
 ) -> int:
-    """Size the timing graph from a replayed probe graph, not from eager calls.
-
-    An eager launch carries a host submission cost that a replayed graph does
-    not, so estimating the in-graph iteration time from eager calls overstates
-    it by roughly one launch overhead. Measured on MTT S5000 with a 3.0us
-    elementwise kernel the eager estimate reads 15-20us, 5-6x high, so
-    ``n_repeat`` came out 5-6x too small and the timed window collapsed to
-    0.7-4.5ms against a requested 10ms. The estimate is also noisy, so
-    ``n_repeat`` swung 245-1488 across repeats of a single config, which is
-    what made per-config latencies incomparable.
-    """
     probe = graph_type()
     with device_interface.graph(probe):
         for _ in range(probe_iters):
@@ -95,7 +76,6 @@ def do_bench_musa_graph(
     warmup_ms: float = 0,
     device_interface: Any,
 ) -> Any:
-    """Benchmark ``fn`` through the active MUSA graph interface."""
     if not isinstance(n_retries, int) or isinstance(n_retries, bool) or n_retries <= 0:
         raise ValueError("n_retries must be a positive integer")
 
