@@ -1,4 +1,5 @@
 import json
+import tarfile
 
 import pytest
 
@@ -121,18 +122,31 @@ def test_main_writes_deterministic_manifest_to_model_cache(tmp_path, monkeypatch
     assert str(output) in capsys.readouterr().out
 
 
-def test_write_manifest_if_missing_never_replaces_existing_content(tmp_path):
-    output = tmp_path / "cache" / "manifest.json"
-    first = {"schema_version": 1, "packages": {"first": {}}}
-    second = {"schema_version": 1, "packages": {"second": {}}}
+def test_write_manifest_bundle_contains_only_manifest_json(tmp_path):
+    manifest = {
+        "schema_version": 1,
+        "packages": {
+            "nvidia-h20": {
+                "versions": {
+                    "1.0.0": {
+                        "url": "https://example.invalid/model.tar.gz",
+                        "sha256": "a" * 64,
+                    },
+                },
+            },
+        },
+    }
+    manifest_path, bundle_path = manifest_generator.write_manifest_bundle(
+        manifest,
+        tmp_path / "release" / "flagtune-manifest.tar.gz",
+    )
 
-    assert manifest_generator.write_manifest_if_missing(output, first) is True
-    first_bytes = output.read_bytes()
-    assert manifest_generator.write_manifest_if_missing(output, second) is False
-
-    assert output.read_bytes() == first_bytes
-    assert json.loads(first_bytes) == first
-    assert not list(output.parent.glob(".manifest.json.*.tmp"))
+    with tarfile.open(bundle_path, mode="r:gz") as archive:
+        assert archive.getnames() == ["manifest.json"]
+        extracted = archive.extractfile("manifest.json")
+        assert extracted is not None
+        assert json.loads(extracted.read()) == manifest
+    assert json.loads(manifest_path.read_text()) == manifest
 
 
 def test_build_default_manifest_uses_environment_base_url(monkeypatch):

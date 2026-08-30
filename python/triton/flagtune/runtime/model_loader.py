@@ -32,10 +32,13 @@ Environment variables:
   * ``FLAGTUNE_MODEL_DIR``: optional local model root with highest precedence.
     It contains flat ``<platform_key>_v<version>.tar.gz`` packages.
   * ``FLAGTUNE_LOCAL_MANIFEST``: optional path override for the local schema-1
-    Manifest. The default is ``$FLAGTUNE_MODEL_CACHE/manifest.json`` and is
-    generated from the bundled catalog when remote resolution first needs it.
-  * ``FLAGTUNE_MODEL_BASE_URL``: optional base URL used only while generating a
-    missing default Manifest.
+    Manifest. The default cache path is ``$FLAGTUNE_MODEL_CACHE/manifest.json``.
+  * ``FLAGTUNE_MODEL_BASE_URL``: optional HTTPS base URL used for model package
+    URL mirroring.
+  * ``FLAGTUNE_MANIFEST_URL``: HTTPS URL of the Manifest tar.gz, required
+    when no usable local or cached Manifest exists.
+  * ``FLAGTUNE_MANIFEST_TTL``: optional cache lifetime in seconds (default 86400).
+  * ``FLAGTUNE_MANIFEST_REFRESH``: when set to ``1``, refresh the Manifest cache.
   * ``FLAGTUNE_MODEL_CACHE``: writable package-cache root. Defaults to
     ``~/.flagtree/flagtune_models``.
   * ``FLAGTUNE_MODEL_VERSION``: optional strict-SemVer exact version pin. An
@@ -43,8 +46,8 @@ Environment variables:
   * ``FLAGTUNE_MODEL_DOWNLOAD_LATEST``: when set to ``1``, consult the Manifest
     before the package cache and select its highest SemVer for the platform.
     Exact version pins still take precedence.
-  * ``FLAGTUNE_DISABLE_REMOTE``: when set to ``1``, prevent package downloads;
-    the user root, local Manifest, and package cache remain available.
+  * ``FLAGTUNE_DISABLE_REMOTE``: when set to ``1``, prevent Manifest and model
+    package downloads; the user root, cached Manifest, and package cache remain available.
 
 Remote artifacts and redirects must use HTTPS, and artifacts must carry a
 lowercase SHA-256 digest. The digest and complete bundle contract are validated
@@ -416,7 +419,6 @@ class FlagTuneModelManager:
         package = resolve_package_info(
             identity.platform_key,
             version=requested,
-            generate_default=not remote_disabled,
         )
         if package is not None:
             return self._download_package(

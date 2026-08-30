@@ -28,4 +28,4 @@ It is the runtime implementation compatibility version, not the independently
 versioned model artifact revision stored in each archive path.
 """
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"
