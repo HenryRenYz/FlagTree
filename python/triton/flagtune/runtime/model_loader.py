@@ -116,6 +116,23 @@ class IncompatibleModelError(RuntimeError):
     """Indicate that a resolved archive cannot serve the requested contract."""
 
 
+class ModelBundleMissingError(IncompatibleModelError):
+    """Report that a resolved platform package carries no bundle for one identity.
+
+    A platform package legitimately covers only the operators, variants, and
+    dtype combinations it was built for, so this is a statement about coverage
+    rather than about the package being wrong. It is raised only when the outer
+    package parsed and validated but has no entry for the requested identity;
+    every other loading failure keeps its own error.
+
+    Integration layers may treat this as "unadapted here" and fall back to their
+    own tuning. Build pipelines should not: they know the identity set they
+    intended to publish and should keep enforcing it at packaging time. It
+    subclasses :class:`IncompatibleModelError` so existing handlers are
+    unaffected.
+    """
+
+
 @dataclass(frozen=True)
 class LoadedFlagTuneModel:
     """Hold a validated identity, compiled variant, predictor, and archive path."""
@@ -338,7 +355,7 @@ class FlagTuneModelManager:
 
         entry = package.models.get(identity.artifact_key)
         if entry is None:
-            raise IncompatibleModelError(
+            raise ModelBundleMissingError(
                 f"FlagTune platform package {package_path} has no model for {identity.artifact_key!r}")
         member = entry["path"]
         try:
@@ -576,9 +593,13 @@ class FlagTuneModelManager:
                 logger.info("FlagTune platform package already cached: %s", destination)
                 return destination
             if remote_disabled:
+                hint = ""
+                if _download_latest_requested():
+                    hint = (" FLAGTUNE_MODEL_DOWNLOAD_LATEST=1 restricted the cache lookup to this "
+                            "version; unset it to accept an older cached package.")
                 raise FileNotFoundError(
                     f"FlagTune package {platform_key!r} version {package.version!r} is not cached and "
-                    "FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it")
+                    f"FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it.{hint}")
 
             from urllib.request import Request
 

@@ -29,7 +29,8 @@ from triton.flagtune.contract.archive import (
 from triton.flagtune.contract.identity import ModelIdentity
 from triton.flagtune.contract.operator_schema import model_config_sha256
 from triton.flagtune.runtime import model_loader, model_sources
-from triton.flagtune.runtime.model_loader import FlagTuneModelManager, IncompatibleModelError
+from triton.flagtune.runtime.model_loader import (FlagTuneModelManager, IncompatibleModelError,
+                                                  ModelBundleMissingError)
 from triton.flagtune.training import manifest_generator
 
 IDENTITY_PATH = ("nvidia-h800", "vendor", "mm", "general", "bf16-bf16-f32")
@@ -1493,3 +1494,26 @@ def test_three_model_loads_reuse_one_parsed_platform_package(tmp_path, monkeypat
         f"flaggems/mm/{variant}/bf16-bf16-bf16/model.tar.gz" for variant in ("gemv", "general_tma", "splitk")
     ]
     assert parsed == [package_path]
+
+
+def test_missing_bundle_raises_its_own_error_but_stays_an_incompatible_model_error(tmp_path, monkeypatch):
+    """A package without this identity is a coverage statement, not a fault.
+
+    Integration layers fall back on ModelBundleMissingError alone, so it must be
+    distinguishable from a corrupt or incompatible package. It stays a subclass
+    so existing IncompatibleModelError handlers keep working.
+    """
+    _install_platform_package(tmp_path / "models", "1.0.0")
+    monkeypatch.setenv("FLAGTUNE_MODEL_DIR", str(tmp_path / "models"))
+    monkeypatch.delenv("FLAGTUNE_MODEL_VERSION", raising=False)
+
+    with pytest.raises(ModelBundleMissingError) as excinfo:
+        FlagTuneModelManager().load(
+            "flaggems/mm",
+            "variant_that_was_never_packaged",
+            platform_key="nvidia-h20",
+            dtype_key="bf16-bf16-bf16",
+        )
+
+    assert "has no model for" in str(excinfo.value)
+    assert isinstance(excinfo.value, IncompatibleModelError)
