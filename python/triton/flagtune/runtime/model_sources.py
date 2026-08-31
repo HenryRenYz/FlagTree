@@ -123,13 +123,9 @@ def _manifest_ttl() -> int:
     try:
         ttl = int(value)
     except ValueError as exc:
-        raise ManifestContractError(
-            f"FLAGTUNE_MANIFEST_TTL must be a non-negative integer, got {value!r}"
-        ) from exc
+        raise ManifestContractError(f"FLAGTUNE_MANIFEST_TTL must be a non-negative integer, got {value!r}") from exc
     if ttl < 0:
-        raise ManifestContractError(
-            f"FLAGTUNE_MANIFEST_TTL must be a non-negative integer, got {value!r}"
-        )
+        raise ManifestContractError(f"FLAGTUNE_MANIFEST_TTL must be a non-negative integer, got {value!r}")
     return ttl
 
 
@@ -145,12 +141,12 @@ def _manifest_cache_is_fresh(path: Path) -> bool:
         _read_manifest_file(path)
         return time.time() - float(fetched_at) < _manifest_ttl()
     except (
-        OSError,
-        UnicodeError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-        ManifestContractError,
+            OSError,
+            UnicodeError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+            ManifestContractError,
     ):
         return False
 
@@ -181,9 +177,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
     if path.is_symlink():
         raise ManifestContractError(f"FlagTune Manifest cache must not be a symlink: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -206,33 +200,17 @@ def _bundle_members(payload: bytes, source: str) -> bytes:
         with tarfile.open(fileobj=BytesIO(payload), mode="r:gz") as archive:
             for member in archive.getmembers():
                 if member.name != "manifest.json":
-                    raise ManifestContractError(
-                        f"remote Manifest archive contains unexpected member {member.name!r}"
-                    )
-                if (
-                    member.name in files
-                    or not member.isfile()
-                    or member.isdir()
-                    or member.issym()
-                    or member.islnk()
-                ):
-                    raise ManifestContractError(
-                        f"remote Manifest archive contains invalid member {member.name!r}"
-                    )
+                    raise ManifestContractError(f"remote Manifest archive contains unexpected member {member.name!r}")
+                if (member.name in files or not member.isfile() or member.isdir() or member.issym() or member.islnk()):
+                    raise ManifestContractError(f"remote Manifest archive contains invalid member {member.name!r}")
                 if member.size < 0 or member.size > _MANIFEST_MAX_MEMBER_BYTES:
-                    raise ManifestFetchError(
-                        f"remote Manifest member {member.name!r} is too large"
-                    )
+                    raise ManifestFetchError(f"remote Manifest member {member.name!r} is too large")
                 handle = archive.extractfile(member)
                 if handle is None:
-                    raise ManifestContractError(
-                        f"remote Manifest member {member.name!r} is not readable"
-                    )
+                    raise ManifestContractError(f"remote Manifest member {member.name!r} is not readable")
                 content = handle.read(_MANIFEST_MAX_MEMBER_BYTES + 1)
                 if len(content) > _MANIFEST_MAX_MEMBER_BYTES:
-                    raise ManifestFetchError(
-                        f"remote Manifest member {member.name!r} is too large"
-                    )
+                    raise ManifestFetchError(f"remote Manifest member {member.name!r} is too large")
                 files[member.name] = content
     except (tarfile.TarError, EOFError, OSError) as exc:
         raise ManifestFetchError(f"cannot read remote Manifest archive {source}: {exc}") from exc
@@ -245,9 +223,7 @@ def _fetch_remote_manifest() -> tuple[Dict[str, Any], bytes, str]:
     url = _manifest_url()
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https" or not parsed.netloc:
-        raise ManifestFetchError(
-            f"FLAGTUNE_MANIFEST_URL must be an HTTPS URL, got {url!r}"
-        )
+        raise ManifestFetchError(f"FLAGTUNE_MANIFEST_URL must be an HTTPS URL, got {url!r}")
     try:
         from triton.flagtune.runtime.model_loader import _open_https
 
@@ -339,12 +315,10 @@ def _load_manifest() -> Dict[str, Any]:
         raise ManifestContractError(f"FlagTune Manifest is not a regular file: {path}")
     if remote_disabled:
         raise ManifestFetchError(
-            f"FlagTune Manifest is not cached at {path} and FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it"
-        )
+            f"FlagTune Manifest is not cached at {path} and FLAGTUNE_DISABLE_REMOTE=1 prevents downloading it")
     if not remote_url:
         raise ManifestFetchError(
-            f"FLAGTUNE_MANIFEST_URL is not configured and no cached FlagTune Manifest exists at {path}"
-        )
+            f"FLAGTUNE_MANIFEST_URL is not configured and no cached FlagTune Manifest exists at {path}")
 
     data, manifest_bytes, source_url = _fetch_remote_manifest()
     _atomic_write(path, manifest_bytes)
@@ -415,8 +389,6 @@ def resolve_package_info(
         mirror = urlparse(configured_base)
         filename = parsed_url.path.rsplit("/", 1)[-1]
         if mirror.scheme.lower() != "https" or not mirror.netloc or not filename:
-            raise ManifestContractError(
-                "FLAGTUNE_MODEL_BASE_URL must be an HTTPS URL with a model path"
-            )
+            raise ManifestContractError("FLAGTUNE_MODEL_BASE_URL must be an HTTPS URL with a model path")
         url = f"{configured_base.rstrip('/')}/{filename}"
     return RemotePackage(selected, url, digest)

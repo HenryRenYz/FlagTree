@@ -29,8 +29,7 @@ from triton.flagtune.contract.archive import (
 from triton.flagtune.contract.identity import ModelIdentity
 from triton.flagtune.contract.operator_schema import model_config_sha256
 from triton.flagtune.runtime import model_loader, model_sources
-from triton.flagtune.runtime.model_loader import (FlagTuneModelManager, IncompatibleModelError,
-                                                  ModelBundleMissingError)
+from triton.flagtune.runtime.model_loader import (FlagTuneModelManager, IncompatibleModelError, ModelBundleMissingError)
 
 IDENTITY_PATH = ("nvidia-h800", "vendor", "mm", "general", "bf16-bf16-f32")
 

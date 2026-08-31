@@ -191,11 +191,7 @@ def build_release_manifest(
                 path = root / path
             if not path.is_file() or path.is_symlink():
                 raise ValueError(f"release model package must be a regular file: {path}")
-            digest_metadata = {
-                key: metadata[key]
-                for key in ("filename", "url")
-                if key in metadata
-            }
+            digest_metadata = {key: metadata[key] for key in ("filename", "url") if key in metadata}
             if not digest_metadata:
                 digest_metadata["filename"] = path.name
             digest_metadata["sha256"] = _sha256_file(path)

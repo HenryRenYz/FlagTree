@@ -22,13 +22,13 @@ ENTRY_2 = {
 @pytest.fixture(autouse=True)
 def clean_manifest_environment(monkeypatch):
     for name in (
-        "FLAGTUNE_LOCAL_MANIFEST",
-        "FLAGTUNE_MODEL_CACHE",
-        "FLAGTUNE_MODEL_BASE_URL",
-        "FLAGTUNE_MANIFEST_URL",
-        "FLAGTUNE_MANIFEST_TTL",
-        "FLAGTUNE_MANIFEST_REFRESH",
-        "FLAGTUNE_DISABLE_REMOTE",
+            "FLAGTUNE_LOCAL_MANIFEST",
+            "FLAGTUNE_MODEL_CACHE",
+            "FLAGTUNE_MODEL_BASE_URL",
+            "FLAGTUNE_MANIFEST_URL",
+            "FLAGTUNE_MANIFEST_TTL",
+            "FLAGTUNE_MANIFEST_REFRESH",
+            "FLAGTUNE_DISABLE_REMOTE",
     ):
         monkeypatch.delenv(name, raising=False)
 
