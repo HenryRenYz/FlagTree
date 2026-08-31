@@ -6,17 +6,65 @@ import pytest
 from triton.flagtune.training import manifest_generator
 
 
-def test_default_h20_catalog_uses_published_url_and_package_version():
+def test_default_catalog_uses_published_urls_and_package_versions():
     manifest = manifest_generator.build_manifest(
         manifest_generator.PACKAGE_CATALOG,
         manifest_generator.MODEL_BASE_URL,
     )
 
-    assert manifest["packages"]["nvidia-h20"]["versions"] == {
-        "1.0.0": {
-            "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
-                    "flagtune-xgb-nvidia-h20_v0.1.0.tar.gz"),
-            "sha256": "b26b1057d3149df7de1e3bb91e6162bcb475709e41719bcf435f81ac3a2b8d4e",
+    assert manifest == {
+        "schema_version": 1,
+        "packages": {
+            "hygon-bw": {
+                "versions": {
+                    "1.0.0": {
+                        "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                "flagtune-xgb-hygon-bw_v1.0.0.tar.gz"),
+                        "sha256":
+                        "5af5202f9354b9a09f34ff5c8e35ffce5868462def9a70729cb050a68bb0db33",
+                    },
+                },
+            },
+            "metax-c550": {
+                "versions": {
+                    "1.0.0": {
+                        "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                "flagtune-xgb-metax-c550_v1.0.0.tar.gz"),
+                        "sha256":
+                        "a1b770e1ed614606126f21b252b815270bda2f1796e688e285fe24a5642bc2b2",
+                    },
+                },
+            },
+            "mthreads-s5000": {
+                "versions": {
+                    "1.0.0": {
+                        "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                "flagtune-xgb-mthreads-s5000_v1.0.0.tar.gz"),
+                        "sha256":
+                        "7e8ab01abedded60c7d564b550e094fea2497e45b3cad92038b7dde64b8ad8d9",
+                    },
+                },
+            },
+            "nvidia-h20": {
+                "versions": {
+                    "1.0.0": {
+                        "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                "flagtune-xgb-nvidia-h20_v1.0.0.tar.gz"),
+                        "sha256":
+                        "1ffb2545402a8d0b92e95fcf747380aee2b52ed818cd00953a08e7dafc571759",
+                    },
+                },
+            },
+            "thead-zw810e": {
+                "versions": {
+                    "1.0.0": {
+                        "url": ("https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans/"
+                                "flagtune-xgb-thead-zw810e_v1.0.0.tar.gz"),
+                        "sha256":
+                        "78858b99a2b2252385f2a8624aff4391d0235bfc270beeb07a8cb7e0c7174942",
+                    },
+                },
+            },
         },
     }
 
@@ -155,7 +203,7 @@ def test_build_default_manifest_uses_environment_base_url(monkeypatch):
     manifest = manifest_generator.build_default_manifest()
 
     assert manifest["packages"]["nvidia-h20"]["versions"]["1.0.0"]["url"] == (
-        "https://mirror.example.com/flagtune/flagtune-xgb-nvidia-h20_v0.1.0.tar.gz")
+        "https://mirror.example.com/flagtune/flagtune-xgb-nvidia-h20_v1.0.0.tar.gz")
 
 
 def test_local_manifest_environment_controls_generator_output(tmp_path, monkeypatch):

@@ -62,18 +62,39 @@ from triton.flagtune.contract.identity import validate_platform_key
 SCHEMA_VERSION = 1
 MODEL_BASE_URL = "https://baai-cp-web.ks3-cn-beijing.ksyuncs.com/trans"
 
-NVIDIA_H20_PLATFORM_KEY = "nvidia-h20"
-NVIDIA_H20_MODEL_VERSION = "1.0.0"
-NVIDIA_H20_REMOTE_FILENAME = "flagtune-xgb-nvidia-h20_v0.1.0.tar.gz"
-NVIDIA_H20_PACKAGE_SHA256 = "b26b1057d3149df7de1e3bb91e6162bcb475709e41719bcf435f81ac3a2b8d4e"
+MODEL_VERSION = "1.0.0"
 
 # Add platforms and versions here for the default publishing catalog. Each version accepts exactly one of
 # ``filename`` or ``url``, together with the SHA-256 of the downloaded bytes.
 PACKAGE_CATALOG: Mapping[str, Mapping[str, Mapping[str, Any]]] = {
-    NVIDIA_H20_PLATFORM_KEY: {
-        NVIDIA_H20_MODEL_VERSION: {
-            "filename": NVIDIA_H20_REMOTE_FILENAME,
-            "sha256": NVIDIA_H20_PACKAGE_SHA256,
+    "hygon-bw": {
+        MODEL_VERSION: {
+            "filename": "flagtune-xgb-hygon-bw_v1.0.0.tar.gz",
+            "sha256": "5af5202f9354b9a09f34ff5c8e35ffce5868462def9a70729cb050a68bb0db33",
+        },
+    },
+    "metax-c550": {
+        MODEL_VERSION: {
+            "filename": "flagtune-xgb-metax-c550_v1.0.0.tar.gz",
+            "sha256": "a1b770e1ed614606126f21b252b815270bda2f1796e688e285fe24a5642bc2b2",
+        },
+    },
+    "mthreads-s5000": {
+        MODEL_VERSION: {
+            "filename": "flagtune-xgb-mthreads-s5000_v1.0.0.tar.gz",
+            "sha256": "7e8ab01abedded60c7d564b550e094fea2497e45b3cad92038b7dde64b8ad8d9",
+        },
+    },
+    "nvidia-h20": {
+        MODEL_VERSION: {
+            "filename": "flagtune-xgb-nvidia-h20_v1.0.0.tar.gz",
+            "sha256": "1ffb2545402a8d0b92e95fcf747380aee2b52ed818cd00953a08e7dafc571759",
+        },
+    },
+    "thead-zw810e": {
+        MODEL_VERSION: {
+            "filename": "flagtune-xgb-thead-zw810e_v1.0.0.tar.gz",
+            "sha256": "78858b99a2b2252385f2a8624aff4391d0235bfc270beeb07a8cb7e0c7174942",
         },
     },
 }
