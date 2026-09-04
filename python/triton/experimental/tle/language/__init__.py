@@ -123,6 +123,7 @@ __all__ = [
     "distributed_dot",
     "distributed",
     "gpu",
+    "dsa",
     "raw",
     "mem_pool",
     "get_mem_pool",
@@ -133,7 +134,7 @@ __all__ = [
     "GroupKind",
 ]
 
-from . import distributed, gpu, raw
+from . import distributed, dsa, gpu, raw
 
 # TLE-specific loop iterator: tl.range plus the `reorder` extension hint.
 from .gpu import range
