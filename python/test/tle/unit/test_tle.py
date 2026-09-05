@@ -241,6 +241,7 @@ class TestWarpSpecializeFrontend:
         assert items[1][3] == [1, 0]
 
 
+@pytest.mark.skipif(TLESemantic is None, reason="tle.gpu is not available on this backend")
 class TestTLESemantic:
     """Test TLE semantic analysis"""
 
@@ -548,10 +549,11 @@ class TestTmaCopyBarrierFrontend:
 class TestPipeFrontend:
     """Test strict front-end validation for tle.pipe."""
 
-    def _make_buffer(self, shape, storage=tle.gpu.smem):
+    def _make_buffer(self, shape, storage=None):
         semantic = TestBufferedTensor._FakeSemantic()
         layout = tle.gpu.swizzled_shared_layout.make_default(len(shape))
-        buffer = tle.gpu.buffered_tensor("base", tl.float16, shape, storage, layout, semantic)
+        buffer = tle.gpu.buffered_tensor("base", tl.float16, shape, tle.gpu.smem if storage is None else storage,
+                                         layout, semantic)
         return buffer, semantic
 
     @pytest.mark.require_tle("pipe")
