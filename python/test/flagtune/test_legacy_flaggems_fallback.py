@@ -73,11 +73,12 @@ def test_legacy_missing_model_selects_one_original_config(legacy):
 
 
 @pytest.mark.parametrize("setting", ["1", "0", "invalid"])
-def test_explicit_cost_model_setting_keeps_original_error(legacy, monkeypatch, setting):
+def test_legacy_call_is_always_compatible(legacy, monkeypatch, setting):
     namespace, tuner, _ = legacy
     monkeypatch.setenv("USE_FLAGTUNE_COST_MODEL", setting)
-    with pytest.raises(ModelUnavailableError, match="test model missing"):
-        namespace["flagtune_policy"](tuner)
+    with pytest.warns(RuntimeWarning, match="without Cost Model prediction"):
+        loaded, _ = namespace["flagtune_policy"](tuner)
+    assert loaded.model_version == "legacy-single-config"
 
 
 def test_direct_and_new_callers_keep_original_error(legacy):
@@ -98,7 +99,7 @@ def test_legacy_validation_failure_is_not_hidden(legacy, monkeypatch):
 
     monkeypatch.setattr(proposer, "_MODEL_MANAGER", SimpleNamespace(load=invalid))
     with pytest.raises(ModelValidationError, match="invalid model archive"):
-        namespace["flagtune_policy"](tuner)
+        proposer._get_model_manager().load("flaggems/mm", "gemv", platform_key="nvidia-h20", dtype_key="f32-f32-f32")
 
 
 def test_legacy_existing_model_is_unchanged(legacy, monkeypatch):
