@@ -45,6 +45,9 @@ from __future__ import annotations
 
 import os
 import math
+import sys
+import warnings
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 from triton.flagtune._dependencies import require_optional_dependency
@@ -55,6 +58,7 @@ from triton.flagtune.runtime.errors import (
     BenchmarkError,
     ContractExecutionError,
     ModelValidationError,
+    ModelUnavailableError,
     ProposerError,
     flagtune_error_boundary,
     flagtune_errors,
@@ -116,6 +120,72 @@ def _disabled(identity: ModelIdentity) -> bool:
     return ("*" in disabled or identity.op_id in disabled or pair in disabled or identity.artifact_key in disabled)
 
 
+def _legacy_flaggems_tuner(identity: ModelIdentity) -> Any:
+    """Recognize the old, uncaught FlagGems model-loading call protocol."""
+    # Old FlagGems calls _ensure_flagtune_proposer from flagtune_policy without
+    # handling missing models. It cannot consume a new exception or fallback
+    # API. Inspect frames only AFTER a missing-model error; do not import or
+    # patch FlagGems, and never change successful model loading. The new
+    # flag_gems.flagtune.cost_model integration owns its own AUTO/REQUIRED
+    # handling and must receive the original error unchanged.
+    if os.environ.get("USE_FLAGTUNE_COST_MODEL") is not None or os.environ.get("USE_FLAGTUNE") == "0":
+        return None
+    frame = sys._getframe(1)
+    seen_helper = False
+    try:
+        while frame is not None:
+            module = frame.f_globals.get("__name__")
+            if module == "flag_gems.flagtune.cost_model":
+                return None
+            if module == "flag_gems.utils.libentry":
+                helper = frame.f_globals.get("_ensure_flagtune_proposer")
+                if frame.f_code is getattr(helper, "__code__", None):
+                    seen_helper = True
+                elif seen_helper and frame.f_code.co_name == "flagtune_policy":
+                    tuner = frame.f_locals.get("self")
+                    if (getattr(tuner, "_flagtune_op_id", None) == identity.op_id
+                            and getattr(tuner, "_flagtune_variant", None) == identity.variant):
+                        return tuner
+                    return None
+            frame = frame.f_back
+    finally:
+        # Frames retain caller locals (including tensors); never cache them.
+        del frame
+    return None
+
+
+class _LegacyFlagGemsVariant:
+    """Minimal metadata for a missing-model, single-config legacy fallback."""
+
+    def __init__(self, tuner: Any):
+        self.tuner = tuner
+        self.param_names = list(dict.fromkeys(name for config in tuner.configs for name in config.kwargs))
+
+    def normalize_inputs(self, inputs):
+        # Used only for diagnostic text in the old policy, not model features.
+        return {}
+
+    def to_config(self, values):
+        # Reuse the original object instead of reconstructing Config: the old
+        # dictionary protocol omits pre_hook and backend-specific launch fields.
+        # Read the live list because the legacy caller caches this adapter across
+        # shapes. Never manufacture a candidate outside its declared domain.
+        for config in self.tuner.configs:
+            projected = dict(config.kwargs)
+            projected.update({name: getattr(config, name) for name in ("num_warps", "num_stages", "num_ctas")})
+            if projected == values:
+                return config
+        raise ValueError("legacy FlagGems fallback config is outside the caller's candidate domain")
+
+    @staticmethod
+    def propose(_benchmark, _shape, initial, _meta):
+        if not initial:
+            raise ValueError("legacy FlagGems fallback candidate list is empty")
+        # No prediction, search or synthetic timing. The old FlagGems policy
+        # benchmarks this single config itself and propagates execution errors.
+        return initial[:1]
+
+
 @flagtune_errors(ModelValidationError)
 def load_model_bundle(
     op_id: str,
@@ -132,13 +202,22 @@ def load_model_bundle(
     manager, so integration layers can inspect parameter metadata without loading
     the model twice.
     """
-    return _get_model_manager().load(
-        op_id,
-        variant,
-        platform_key=platform_key,
-        dtype_key=dtype_key,
-        model_version=model_version,
-    )
+    try:
+        return _get_model_manager().load(
+            op_id,
+            variant,
+            platform_key=platform_key,
+            dtype_key=dtype_key,
+            model_version=model_version,
+        )
+    except ModelUnavailableError:
+        identity = ModelIdentity(platform_key, op_id, variant, dtype_key)
+        tuner = _legacy_flaggems_tuner(identity)
+        if tuner is None:
+            raise
+        # Keep this sentinel out of the model manager/package cache. Only the
+        # old caller's proposer pool may retain it; it is not a loaded model.
+        return SimpleNamespace(model_version="legacy-single-config", variant=_LegacyFlagGemsVariant(tuner))
 
 
 @flagtune_errors(ModelValidationError)
@@ -196,6 +275,14 @@ def make_config_proposer(
         model_version=model_version,
     )
     variant_info = loaded.variant
+    if isinstance(variant_info, _LegacyFlagGemsVariant):
+        warnings.warn(
+            f"FlagTune model unavailable for {identity.artifact_key}; legacy FlagGems AUTO fallback "
+            "will use the first caller config without Cost Model prediction",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return variant_info.propose
     model = loaded.predictor
 
     top_k = _top_k()

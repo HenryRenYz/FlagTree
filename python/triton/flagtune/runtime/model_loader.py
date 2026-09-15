@@ -524,21 +524,7 @@ class FlagTuneModelManager:
         package: PlatformPackage,
         source: str,
     ) -> None:
-        """Validate every child and the required H20 baseline models."""
-        if package.platform_key == "nvidia-h20":
-            required = {
-                ModelIdentity(
-                    "nvidia-h20",
-                    "flaggems/mm",
-                    variant,
-                    "bf16-bf16-bf16",
-                ).artifact_key
-                for variant in ("gemv", "general_tma", "splitk")
-            }
-            actual = set(package.models)
-            missing = sorted(required - actual)
-            if missing:
-                raise IncompatibleModelError(f"FlagTune package has missing required H20 models: {missing}")
+        """Validate only model artifacts requested by the caller."""
         for artifact in sorted(package.models):
             identity_parts = artifact.split("/")
             identity = ModelIdentity(
