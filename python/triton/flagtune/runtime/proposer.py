@@ -128,10 +128,7 @@ def _legacy_flaggems_tuner(identity: ModelIdentity) -> Any:
     # patch FlagGems, and never change successful model loading. The new
     # flag_gems.flagtune.cost_model integration owns its own AUTO/REQUIRED
     # handling and must receive the original error unchanged.
-    if (
-        os.environ.get("USE_FLAGTUNE_COST_MODEL") is not None
-        or os.environ.get("USE_FLAGTUNE") in {"0", "1"}
-    ):
+    if (os.environ.get("USE_FLAGTUNE_COST_MODEL") is not None or os.environ.get("USE_FLAGTUNE") in {"0", "1"}):
         return None
     frame = sys._getframe(1)
     seen_helper = False
