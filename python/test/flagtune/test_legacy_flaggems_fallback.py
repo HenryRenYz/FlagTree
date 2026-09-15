@@ -72,13 +72,20 @@ def test_legacy_missing_model_selects_one_original_config(legacy):
         propose(None, {}, [], {})
 
 
-@pytest.mark.parametrize("setting", ["1", "0", "invalid"])
-def test_legacy_call_is_always_compatible(legacy, monkeypatch, setting):
+@pytest.mark.parametrize("setting", ["0", "invalid"])
+def test_legacy_ordinary_call_is_compatible(legacy, monkeypatch, setting):
     namespace, tuner, _ = legacy
     monkeypatch.setenv("USE_FLAGTUNE_COST_MODEL", setting)
     with pytest.warns(RuntimeWarning, match="without Cost Model prediction"):
         loaded, _ = namespace["flagtune_policy"](tuner)
     assert loaded.model_version == "legacy-single-config"
+
+
+def test_legacy_explicit_cost_model_keeps_original_error(legacy, monkeypatch):
+    namespace, tuner, _ = legacy
+    monkeypatch.setenv("USE_FLAGTUNE_COST_MODEL", "1")
+    with pytest.raises(ModelUnavailableError, match="test model missing"):
+        namespace["flagtune_policy"](tuner)
 
 
 def test_direct_and_new_callers_keep_original_error(legacy):

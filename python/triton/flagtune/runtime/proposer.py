@@ -125,9 +125,12 @@ def _legacy_flaggems_tuner(identity: ModelIdentity) -> Any:
     # Old FlagGems calls _ensure_flagtune_proposer from flagtune_policy without
     # handling missing models. It cannot consume a new exception or fallback
     # API. Legacy callers are permanently kept on the single-config path,
-    # including when they set Cost Model environment variables. Cost Model
-    # support for this integration is retired; users must synchronize to the
-    # current FlagGems code, which delegates through ``cost_model.run_policy``.
+    # unless they explicitly request Cost Model. Ordinary callers therefore do
+    # not depend on a hosted model. A dedicated legacy BF16 Cost Model test may
+    # set USE_FLAGTUNE_COST_MODEL=1 and use a compatible v0.1.0 package; users
+    # should synchronize to current FlagGems for the supported integration.
+    if os.environ.get("USE_FLAGTUNE_COST_MODEL") == "1":
+        return None
     frame = sys._getframe(1)
     seen_helper = False
     try:
