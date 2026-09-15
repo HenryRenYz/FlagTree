@@ -128,7 +128,10 @@ def _legacy_flaggems_tuner(identity: ModelIdentity) -> Any:
     # patch FlagGems, and never change successful model loading. The new
     # flag_gems.flagtune.cost_model integration owns its own AUTO/REQUIRED
     # handling and must receive the original error unchanged.
-    if os.environ.get("USE_FLAGTUNE_COST_MODEL") is not None or os.environ.get("USE_FLAGTUNE") == "0":
+    if (
+        os.environ.get("USE_FLAGTUNE_COST_MODEL") is not None
+        or os.environ.get("USE_FLAGTUNE") in {"0", "1"}
+    ):
         return None
     frame = sys._getframe(1)
     seen_helper = False
@@ -202,6 +205,20 @@ def load_model_bundle(
     manager, so integration layers can inspect parameter metadata without loading
     the model twice.
     """
+    identity = ModelIdentity(platform_key, op_id, variant, dtype_key)
+    # The legacy FlagGems policy cannot distinguish a model-backed proposer
+    # from its ordinary tuning path and has no fallback boundary of its own.
+    # When it has not explicitly requested Cost Model, short-circuit before
+    # touching the model manager, even if a matching package happens to exist.
+    # This preserves the old Default/Expanded behavior and prevents a hosted
+    # model from changing unrelated upstream tests. Newer FlagGems delegates
+    # through ``cost_model.run_policy`` and is deliberately excluded above.
+    tuner = _legacy_flaggems_tuner(identity)
+    if tuner is not None:
+        return SimpleNamespace(
+            model_version="legacy-single-config",
+            variant=_LegacyFlagGemsVariant(tuner),
+        )
     try:
         return _get_model_manager().load(
             op_id,
@@ -211,7 +228,6 @@ def load_model_bundle(
             model_version=model_version,
         )
     except ModelUnavailableError:
-        identity = ModelIdentity(platform_key, op_id, variant, dtype_key)
         tuner = _legacy_flaggems_tuner(identity)
         if tuner is None:
             raise

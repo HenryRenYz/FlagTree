@@ -49,7 +49,7 @@ def test_legacy_missing_model_selects_one_original_config(legacy):
     namespace, tuner, calls = legacy
     with pytest.warns(RuntimeWarning, match="without Cost Model prediction"):
         loaded, propose = namespace["flagtune_policy"](tuner)
-    assert calls
+    assert not calls, "legacy compatibility must bypass model loading"
     assert loaded.model_version == "legacy-single-config"
     assert loaded.variant.param_names == ["BLOCK_SIZE"]
     assert loaded.variant.normalize_inputs({}) == {}
@@ -91,6 +91,7 @@ def test_direct_and_new_callers_keep_original_error(legacy):
 
 def test_legacy_validation_failure_is_not_hidden(legacy, monkeypatch):
     namespace, tuner, _ = legacy
+    monkeypatch.setenv("USE_FLAGTUNE_COST_MODEL", "1")
 
     def invalid(*args, **kwargs):
         raise ModelValidationError("invalid model archive")
