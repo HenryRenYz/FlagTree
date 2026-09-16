@@ -6,6 +6,7 @@
 #include "TritonMUSACommon/MusaArchTraits.h"
 #include "TritonMUSACommon/TMEUtils.h"
 #include "mlir/IR/DialectImplementation.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Analysis/Utility.h"
@@ -17,6 +18,7 @@
 // clang-format on
 
 #include <algorithm>
+#include <limits>
 
 using namespace mlir;
 using namespace mlir::triton::musa;
@@ -235,7 +237,10 @@ LogicalResult SquadDotOp::verify() {
     return emitError("SQMMA encoding uses an unsupported MUSA SQMMA version");
   if (!triton::musa::isSupportedSqmma(getEltTypeA(), getEltTypeB(),
                                       getEltTypeC(), getM(), getN(), getK(),
-                                      *sqTraits))
+                                      *sqTraits) ||
+      !triton::musa::isSupportedSqmmaForCapability(
+          getEltTypeA(), getEltTypeB(), getEltTypeC(), getM(), getN(), getK(),
+          triton::musa::getMusaComputeCapability(getOperation())))
     return emitError(
         "SQMMA encoding carries an unsupported PH1 shape/type combination");
   Dialect &dialect = aEncoding.getDialect();
@@ -511,6 +516,20 @@ LogicalResult BarrierAddTransOp::verify() {
   if (failed(verifyNonNegativeI32Constant(getOperation(), getTransBytes(),
                                           "transBytes")))
     return failure();
+  if (auto parts = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
+          triton::musa::kTLEExpectBytesPartsAttr)) {
+    int64_t sum = 0;
+    for (int32_t part : parts.asArrayRef()) {
+      if (part <= 0 ||
+          sum > std::numeric_limits<int32_t>::max() - part)
+        return emitOpError("expect_bytes_parts must contain positive i32 values");
+      sum += part;
+    }
+    APInt transBytes;
+    if (matchPattern(getTransBytes(), m_ConstantInt(&transBytes)) &&
+        (sum != transBytes.getSExtValue() || parts.asArrayRef().empty()))
+      return emitOpError("expect_bytes_parts must sum to transBytes");
+  }
   return verifyTMEIssueThread(getOperation());
 #else
   return verifyNonNegativeI32Constant(getOperation(), getTransBytes(),

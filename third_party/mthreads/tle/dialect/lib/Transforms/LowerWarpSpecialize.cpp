@@ -24,6 +24,8 @@ namespace ttg = triton::gpu;
 
 static constexpr StringLiteral kStaticWarpSpecializeAttr =
     "musa_tle.static_warp_specialize";
+static constexpr StringLiteral kDefaultProducerAttr =
+    "musa_tle.default_producer";
 class PrepareWarpSpecializePass
     : public impl::TritonMUSAGPUTLEPrepareWarpSpecializeBase<
           PrepareWarpSpecializePass> {
@@ -58,6 +60,10 @@ class PrepareWarpSpecializePass
       return ws.emitOpError(
           "MUSA TLE static warp_specialize worker region and warp-count "
           "sizes must match");
+    if (ws->hasAttr(kDefaultProducerAttr) && workerRegions.size() != 1)
+      return ws.emitOpError(
+          "MUSA TLE default producer requires exactly one consumer worker "
+          "partition");
     if (auto requestedRegisters = ws.getRequestedRegisters()) {
       if (requestedRegisters->size() != workerRegions.size())
         return ws.emitOpError(

@@ -8,6 +8,7 @@
 #include "tle/dialect/include/IR/Dialect.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -34,6 +35,7 @@ namespace ttg = triton::gpu;
 namespace tle = triton::tle;
 namespace ttmg = triton::musa;
 namespace musa_tle = triton::musa_tle;
+namespace ttmg = triton::musa;
 
 constexpr StringLiteral kPipeLocalStoreWaitGroupsAttr =
     "musa_tle.pipe_local_store_wait_groups";
@@ -852,6 +854,8 @@ class LowerPipePass
       Value barrier = createIndex(builder, loc, op, pipeArtifacts.emptyBase,
                                   release.getStage());
       Value phase = arith::ConstantIntOp::create(builder, loc, 0, 32);
+      Value barrier = createIndex(builder, loc, op, state.emptyBases.front(),
+                                  release.getStage());
       musa_tle::BarrierArriveOp::create(builder, loc, barrier, phase,
                                         builder.getI32IntegerAttr(1));
       release.erase();

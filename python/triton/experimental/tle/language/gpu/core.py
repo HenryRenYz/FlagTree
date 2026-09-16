@@ -214,20 +214,36 @@ def _deduplicate_warp_specialize_captures(worker_items):
 
 
 @tl.builtin
-def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic: TLESemantic | None = None,
-                    _generator=None):
+def warp_specialize(
+    functions_and_args,
+    worker_num_warps,
+    worker_num_regs,
+    default_is_producer=False,
+    _semantic: TLESemantic | None = None,
+    _generator=None,
+):
     """
     Create an explicit GPU warp-specialized region.
 
     ``functions_and_args[0]`` is emitted into the default partition. Later
     entries are emitted into worker partitions, with their warp counts and
     requested register counts provided by ``worker_num_warps`` and
-    ``worker_num_regs``.
+    ``worker_num_regs``. On mthreads, ``default_is_producer=True`` marks the
+    default partition as the pipe producer and requires one consumer worker.
     """
     if _generator is None:
         raise ValueError("warp_specialize requires a Triton code generator")
     functions_and_args = tl._unwrap_if_constexpr(functions_and_args)
     mthreads_enabled = mthreads_common.enabled()
+    default_is_producer = tl._unwrap_if_constexpr(default_is_producer)
+    if not isinstance(default_is_producer, bool):
+        raise ValueError(
+            "warp_specialize default_is_producer must be a compile-time bool"
+        )
+    if default_is_producer and not mthreads_enabled:
+        raise ValueError(
+            "warp_specialize default_is_producer is only supported on mthreads"
+        )
     if mthreads_enabled:
         worker_num_warps, worker_num_regs = mthreads_warp_specialize.normalize_config(worker_num_warps, worker_num_regs)
     else:
@@ -272,7 +288,12 @@ def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _sema
 
     builder.restore_insertion_point(insert_pt)
     if mthreads_enabled:
-        ws_op = mthreads_warp_specialize.create_op(builder, result_types, worker_num_warps)
+        ws_op = mthreads_warp_specialize.create_op(
+            builder,
+            result_types,
+            worker_num_warps,
+            default_is_producer,
+        )
     else:
         ws_op = builder.create_warp_specialize(result_types, worker_arg_handles, worker_num_warps)
     real_default_block = builder.create_block_with_parent(ws_op.get_default_region(), [])
@@ -978,6 +999,7 @@ def copy(
     offsets: Sequence[constexpr | tensor] = None,
     barrier=None,
     mask=None,
+    completion_group_leader=None,
     _semantic: TLESemantic | None = None,
 ) -> None:
     """
@@ -1014,6 +1036,10 @@ def copy(
             global-to-local copies, masked elements are written to local memory
             as zero. For local-to-global copies, masked elements are not stored.
             TMA descriptor copies do not accept a mask.
+        completion_group_leader: MThreads-only explicit completion grouping. Use ``True``
+            on the first copy sharing a barrier and ``False`` on subsequent copies. The
+            first copy records the group's total ``expect_bytes`` and performs the sole
+            producer arrival; every copy contributes transfer completion to that barrier.
         _semantic: Internal semantic analyzer for validation and compilation (user-provided)
 
     Raises:
@@ -1199,6 +1225,8 @@ def copy(
     if is_normcopy:
         if barrier is not None:
             raise ValueError("copy barrier is only supported for TMA global-to-shared copy")
+        if completion_group_leader is not None:
+            raise ValueError("completion_group_leader is only supported for TMA global-to-shared copy")
         return normcopy(src, dst, shape, direction, mask, _semantic)
     if mask is not None:
         raise ValueError("copy mask is only supported for standard pointer-tensor copies")
@@ -1208,8 +1236,19 @@ def copy(
             if direction != CopyDirection.GM_TO_LOCAL:
                 raise ValueError("TMA copy barrier is only supported for global-to-shared TMA copy")
             barrier_slot = _tma_completion_barrier_slot(barrier, _semantic)
-        return mthreads_copy.tmacopy(src, dst, direction, shape, offsets, barrier_slot, _semantic)
+        return mthreads_copy.tmacopy(
+            src,
+            dst,
+            direction,
+            shape,
+            offsets,
+            barrier_slot,
+            completion_group_leader,
+            _semantic,
+        )
     else:
+        if completion_group_leader is not None:
+            raise ValueError("completion_group_leader is only supported on MThreads")
         return tmacopy(src, dst, direction, shape, offsets, barrier, _semantic)
 
 

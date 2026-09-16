@@ -594,7 +594,8 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
 
   const unsigned instM = instrShape[0];
   const unsigned instN = instrShape[1];
-  const unsigned instK = instrShape[2];
+  const unsigned encodedInstK = instrShape[2];
+  unsigned instK = encodedInstK;
 
   Value opA = getDotOperandA(op);
   Value opB = getDotOperandB(op);
@@ -642,8 +643,31 @@ LogicalResult convertSQMMADotImpl(DotLikeOp op, DotLikeAdaptor adaptor,
   if (elemBytes == 0)
     elemBytes = 1;
 
-  if (!isSupportedSqmma(eltTypeA, eltTypeB, eltTypeC, instM, instN, instK,
-                        *sqTraits, layoutA, layoutB, elemBytes, true, true))
+  const int capability =
+      triton::musa::getMusaComputeCapability(op.getOperation());
+
+  // PH1 advertises a narrow FP16/BF16 K=128 contract, but the bundled llc
+  // shipped with the current MUSA toolchain crashes while expanding the
+  // corresponding LLVM intrinsic. Keep the logical K=128 encoding (so the
+  // layout/descriptor contract remains unchanged) and lower only this
+  // compatibility subset to two K=64 operations, which use the stable SQMMA
+  // intrinsic family. The loader's K-tile controls the descriptor offset, so
+  // the two calls consume adjacent K=64 slices of the same shared tile.
+  // Native K=128 forms (for example s8/fp8) must retain their original
+  // intrinsic and descriptor contract.
+  const bool splitNarrowK128 =
+      capability == 31 && encodedInstK == 128 && eltTypeA == eltTypeB &&
+      (eltTypeA == triton::musa::SQMMAEltType::f16 ||
+       eltTypeA == triton::musa::SQMMAEltType::bf16);
+  if (splitNarrowK128)
+    instK = 64;
+
+  if (!isSupportedSqmma(eltTypeA, eltTypeB, eltTypeC, instM, instN,
+                        encodedInstK, *sqTraits, layoutA, layoutB, elemBytes,
+                        true, true) ||
+      !triton::musa::isSupportedSqmmaForCapability(
+          eltTypeA, eltTypeB, eltTypeC, instM, instN, encodedInstK,
+          capability))
     return op.emitError("MUSA SQMMA: unsupported shape or element type");
   std::string sqmmaIntrinsic =
       triton::musa::lookupSqmmaIntrinsic(eltTypeA, instM, instN, instK);

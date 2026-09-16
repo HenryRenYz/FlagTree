@@ -56,6 +56,135 @@ def _pipe_tme_store_consumer(reader, desc, BLOCK: tl.constexpr, ITERATIONS: tl.c
 
 
 @triton.jit
+def _pipe_fused_consumer_producer(
+    reader,
+    writer,
+    desc,
+    out,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    for iteration in tl.static_range(0, ITERATIONS):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.data, (BLOCK, ), (iteration * BLOCK, ))
+        writer.commit(iteration)
+        wait = reader.wait(iteration)
+        tl.store(
+            out + ITERATIONS + iteration,
+            iteration + tl.where(wait.is_closed, 1000, 0),
+        )
+        reader.release(iteration)
+
+
+@triton.jit
+def _dual_pipe_consumer(first, second, out, ITERATIONS: tl.constexpr):
+    for iteration in tl.static_range(0, ITERATIONS):
+        first_wait = first.wait(iteration)
+        second_wait = second.wait(iteration)
+        tl.store(out + iteration,
+                 iteration + tl.where(first_wait.is_closed, 1000, 0) + tl.where(second_wait.is_closed, 2000, 0))
+        first.release(iteration)
+        second.release(iteration)
+
+
+@triton.jit
+def _dual_pipe_producer(first, second, first_desc, second_desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
+    for iteration in tl.static_range(0, ITERATIONS):
+        first_slot = first.acquire(iteration)
+        second_slot = second.acquire(iteration)
+        tle.gpu.copy(first_desc, first_slot.data, (BLOCK, ), (iteration * BLOCK, ))
+        tle.gpu.copy(second_desc, second_slot.data, (BLOCK, ), (iteration * BLOCK, ))
+        first.commit(iteration)
+        second.commit(iteration)
+
+
+@triton.jit
+def _constant_expr_pipe_consumer(reader, out, ITERATIONS: tl.constexpr):
+    # Keep the bound as an arithmetic expression until the pipeliner sees the
+    # SCF loop. This mirrors bounds produced by descriptor/TLE lowering where
+    # constexpr values can remain as arith.addi/muli chains.
+    for iteration in tl.range(0, ITERATIONS + 0, num_stages=1):
+        wait = reader.wait(iteration)
+        tl.store(out + iteration, iteration + tl.where(wait.is_closed, 1000, 0))
+        reader.release(iteration)
+
+
+@triton.jit
+def _constant_expr_pipe_producer(
+    writer, desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr
+):
+    for iteration in tl.range(0, ITERATIONS + 0, num_stages=1):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.data, (BLOCK,), (iteration * BLOCK,))
+        writer.commit(iteration)
+
+
+@triton.jit
+def _constant_expr_pipe_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK),
+        dtype=tl.float16,
+        layout=None,
+        scope=tle.gpu.smem,
+        nv_mma_shared_layout=False,
+    )
+    pipe = tle.pipe(capacity=STAGES, scope="cta", data=smem)
+    tle.gpu.warp_specialize(
+        [
+            (_constant_expr_pipe_consumer, (pipe.reader(), out, ITERATIONS)),
+            (
+                _constant_expr_pipe_producer,
+                (pipe.writer(), desc, BLOCK, ITERATIONS),
+            ),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _fused_pipe_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK),
+        dtype=tl.float16,
+        layout=None,
+        scope=tle.gpu.smem,
+        nv_mma_shared_layout=False,
+    )
+    pipe = tle.pipe(capacity=STAGES, scope="cta", name="fused_pipe", data=smem)
+    tle.gpu.warp_specialize(
+        [
+            (_pipe_consumer, (pipe.reader(), out, ITERATIONS)),
+            (
+                _pipe_fused_consumer_producer,
+                (
+                    pipe.reader(),
+                    pipe.writer(),
+                    desc,
+                    out,
+                    BLOCK,
+                    ITERATIONS,
+                ),
+            ),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
 def _non_ws_pipe_mm_kernel(
     a_desc,
     b_desc,
@@ -104,6 +233,45 @@ def _non_ws_pipe_mm_kernel(
 
     offsets = tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
     tl.store(out + offsets, acc.to(tl.float16))
+
+
+@triton.jit
+def _sibling_if_pipe_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    """Intentionally invalid: wait/release are in sibling conditional regions.
+
+    The MTT barrier.wait operation has no predicate operand.  LowerPipe must
+    therefore reject this form until it can prove that both operations carry
+    the same loop phase on every path.  Keeping this reproducer in the test
+    suite prevents a permissive condition-SSA matcher from silently turning a
+    branch-local wait into a deadlocking unconditional barrier.
+    """
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK),
+        dtype=tl.float16,
+        layout=None,
+        scope=tle.gpu.smem,
+        nv_mma_shared_layout=False,
+    )
+    pipe = tle.pipe(capacity=STAGES, scope="cta", name="sibling_if", data=smem)
+    writer = pipe.writer()
+    reader = pipe.reader()
+    for iteration in tl.range(0, ITERATIONS, num_stages=1):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.data, (BLOCK,), (iteration * BLOCK,))
+        writer.commit(iteration)
+        # Deliberately use two non-identical predicates.  They are equivalent
+        # for this integer range, but keeping their SSA definitions separate
+        # ensures the frontend cannot fold the two sibling regions into one.
+        if iteration % 2 == 0:
+            reader.wait(iteration)
+        if iteration % 2 != 1:
+            reader.release(iteration)
 
 
 @triton.jit
@@ -586,6 +754,76 @@ def _mixed_tme_local_store_producer(writer, desc, BLOCK: tl.constexpr, ITERATION
         tle.gpu.copy(desc, slot.data, (BLOCK, ), (iteration * BLOCK, ))
         tl.store(tle.gpu.local_ptr(slot.data, (offsets, )), offsets.to(tl.float16))
         writer.commit(iteration)
+def _multi_field_consumer(reader, out, ITERATIONS: tl.constexpr):
+    for iteration in tl.static_range(0, ITERATIONS):
+        wait = reader.wait(iteration)
+        tl.store(out + iteration, iteration + tl.where(wait.is_closed, 1000, 0))
+        reader.release(iteration)
+
+
+@triton.jit
+def _multi_field_producer(writer, desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
+    for iteration in tl.static_range(0, ITERATIONS):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.first, (BLOCK, ), (iteration * BLOCK, ))
+        tle.gpu.copy(desc, slot.second, (BLOCK, ), (iteration * BLOCK, ))
+        writer.commit(iteration)
+
+
+@triton.jit
+def _multi_field_kernel(desc, out, STAGES: tl.constexpr, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
+    first = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    second = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    pipe = tle.pipe(capacity=STAGES, first=first, second=second)
+    tle.gpu.warp_specialize(
+        [
+            (_multi_field_consumer, (pipe.reader(), out, ITERATIONS)),
+            (_multi_field_producer, (pipe.writer(), desc, BLOCK, ITERATIONS)),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _three_field_producer(writer, desc, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
+    for iteration in tl.static_range(0, ITERATIONS):
+        slot = writer.acquire(iteration)
+        tle.gpu.copy(desc, slot.first, (BLOCK, ), (iteration * BLOCK, ))
+        tle.gpu.copy(desc, slot.second, (BLOCK, ), (iteration * BLOCK, ))
+        tle.gpu.copy(desc, slot.third, (BLOCK, ), (iteration * BLOCK, ))
+        writer.commit(iteration)
+
+
+@triton.jit
+def _three_field_kernel(desc, out, STAGES: tl.constexpr, BLOCK: tl.constexpr, ITERATIONS: tl.constexpr):
+    first = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    second = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    third = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    pipe = tle.pipe(capacity=STAGES, first=first, second=second, third=third)
+    tle.gpu.warp_specialize(
+        [
+            (_multi_field_consumer, (pipe.reader(), out, ITERATIONS)),
+            (_three_field_producer, (pipe.writer(), desc, BLOCK, ITERATIONS)),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
+@triton.jit
+def _too_many_fields_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    first = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    second = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    third = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    fourth = tle.gpu.alloc((STAGES, BLOCK), dtype=tl.float16, nv_mma_shared_layout=False)
+    tle.pipe(capacity=STAGES, first=first, second=second, third=third, fourth=fourth)
 
 
 @triton.jit
@@ -2872,6 +3110,49 @@ def _one_shot_dynamic_stage_kernel(
     tl.store(out, tl.where(wait.is_closed, 1, 0))
 
 
+@triton.jit
+def _one_shot_producer(writer, desc, BLOCK: tl.constexpr):
+    # The acquire is accepted as a source-level slot query, but the mthreads
+    # one-shot lowering erases its empty-barrier operation.
+    slot = writer.acquire(0)
+    tle.gpu.copy(desc, slot.data, (BLOCK,), (0,))
+    writer.commit(0)
+
+
+@triton.jit
+def _one_shot_consumer(reader, out):
+    wait = reader.wait(0)
+    tl.store(out, tl.where(wait.is_closed, 1000, 0))
+    # one_shot release is intentionally a no-op: there is no slot reuse.
+    reader.release(0)
+
+
+@triton.jit
+def _one_shot_pipe_kernel(
+    desc,
+    out,
+    STAGES: tl.constexpr,
+    BLOCK: tl.constexpr,
+    ITERATIONS: tl.constexpr,
+):
+    smem = tle.gpu.alloc(
+        (STAGES, BLOCK),
+        dtype=tl.float16,
+        layout=None,
+        scope=tle.gpu.smem,
+        nv_mma_shared_layout=False,
+    )
+    pipe = tle.pipe(capacity=STAGES, scope="cta", one_shot=True, data=smem)
+    tle.gpu.warp_specialize(
+        [
+            (_one_shot_consumer, (pipe.reader(), out)),
+            (_one_shot_producer, (pipe.writer(), desc, BLOCK)),
+        ],
+        worker_num_warps=[4],
+        worker_num_regs=[24],
+    )
+
+
 def _compile_invalid_pipeline(
     fn,
     kind=None,
@@ -2913,6 +3194,44 @@ def _compile_invalid_pipeline(
     metadata = {}
     module = compiler_stages["ttir"](module, metadata)
     return compiler_stages["ttgir"](module, metadata)
+
+
+def _compile_pipeline(fn, stages):
+    target, backend = mthreads_backend()
+    options = backend.parse_options({"num_warps": 16, "num_stages": 1})
+    context = ir.context()
+    ir.load_dialects(context)
+    backend.load_dialects(context)
+    source = ASTSource(
+        fn=fn,
+        signature={
+            "desc": "tensordesc<fp16[128]>",
+            "out": "*i32",
+            "STAGES": "constexpr",
+            "BLOCK": "constexpr",
+            "ITERATIONS": "constexpr",
+        },
+        constexprs={"STAGES": stages, "BLOCK": 128, "ITERATIONS": 2 * stages},
+    )
+    module = source.make_ir(
+        target,
+        options,
+        backend.get_codegen_implementation(options),
+        backend.get_module_map(),
+        context,
+    )
+    compiler_stages = {}
+    backend.add_stages(compiler_stages, options, Language.TRITON)
+    metadata = {}
+    module = compiler_stages["ttir"](module, metadata)
+    ttir = module.str_nodebug()
+    module = compiler_stages["ttgir"](module, metadata)
+    ttgir = module.str_nodebug()
+
+    pm = ir.pass_manager(context)
+    libtriton.mthreads.passes.ttgpuir.add_allocate_shared_memory(pm, 31)
+    pm.run(module, "allocate_pipe_shared_memory")
+    return ttir, ttgir, module.str_nodebug()
 
 
 def _assert_pipe_lowering_clean(compiled, *, static_ws=False, num_warps=None):
@@ -5463,6 +5782,66 @@ def _split_writer(writer, BLOCK: tl.constexpr, N: tl.constexpr):
         tl.store(tle.gpu.local_ptr(slot.b, (x, )), value + 1)
         writer.commit(i)
 
+@pytest.mark.parametrize("stages", [1, 2, 3])
+def test_mthreads_single_field_pipe_lowers_to_hardware_barriers(stages):
+    ttir, ttgir, allocated = _compile_pipeline(_pipe_kernel, stages)
+
+    assert ttir.count("tle.pipe.create") == 1, ttir
+    assert ttir.count("tle.pipe.writer_acquire") == 2 * stages, ttir
+    assert ttir.count("tle.pipe.writer_commit") == 2 * stages, ttir
+    assert ttir.count("tle.pipe.reader_wait") == 2 * stages, ttir
+    assert ttir.count("tle.pipe.reader_release") == 2 * stages, ttir
+    assert "tle.pipe." not in ttgir, ttgir
+    assert ttgir.count("ttmg.init_arrival") == 2 * stages, ttgir
+    assert f"musa.max_bar_id = {2 * stages}" in ttgir, ttgir
+    assert "ttmg.barrier_add_trans" in ttgir, ttgir
+    assert "ttmg.wait_barrier" in ttgir, ttgir
+    assert "ttmg.warp_arrive_barrier" in ttgir, ttgir
+    assert "ttmg.async_tme_copy_global_to_local" in ttgir, ttgir
+    assert "tle.pipe." not in allocated, allocated
+    assert "1000" not in ttgir, ttgir
+
+    constants = _i32_constants(ttgir)
+    arrivals = re.findall(r"ttmg\.init_arrival\s+(%[-\w.]+),\s+(%[-\w.]+),\s+(%[-\w.]+)", ttgir)
+    assert [constants[count] for _, count, _ in arrivals] == [1] * stages + [16] * stages
+    assert [constants[phase] for _, _, phase in arrivals] == [0] * (2 * stages)
+    assert ttgir.count("ttmg.barrier_add_trans") == 2 * stages
+    assert ttgir.count("ttmg.arrive_barrier_noret") == 2 * stages
+    assert all("%c256" in line for line in ttgir.splitlines() if "ttmg.barrier_add_trans" in line)
+    # A one-field grouped completion is still a complete async transaction;
+    # the producer arrival must not precede the TME copy issue.
+    add_pos = ttgir.index("ttmg.barrier_add_trans")
+    copy_pos = ttgir.index("ttmg.async_tme_copy_global_to_local")
+    arrive_pos = ttgir.index("ttmg.arrive_barrier_noret")
+    assert add_pos < copy_pos < arrive_pos, ttgir
+
+
+def test_mthreads_pipeline_recognizes_constant_arithmetic_loop_bounds():
+    """Constant addi bounds must not be classified as dynamic loops."""
+    _, ttgir, _ = _compile_pipeline(_constant_expr_pipe_kernel, 2)
+
+    # The static pipeline has no prologue masks. A dynamic-loop misclassification
+    # would wrap the producer/consumer prologue in ttg.mask operations and
+    # reintroduce branch-local pipe phases.
+    assert "ttg.mask" not in ttgir, ttgir
+    assert "tle.pipe." not in ttgir, ttgir
+
+
+@pytest.mark.parametrize("stages", [1, 2, 3])
+def test_mthreads_one_shot_pipe_skips_empty_barrier_ring(stages):
+    ttir, ttgir, _ = _compile_pipeline(_one_shot_pipe_kernel, stages)
+
+    assert ttir.count("tle.pipe.create") == 1, ttir
+    assert ttir.count("tle.pipe.writer_acquire") == 1, ttir
+    assert ttir.count("tle.pipe.reader_wait") == 1, ttir
+    assert ttir.count("tle.pipe.reader_release") == 1, ttir
+    assert "tle.pipe." not in ttgir, ttgir
+    # Only the full barrier ring is needed for a one-shot ready/full edge.
+    assert ttgir.count("ttmg.init_arrival") == stages, ttgir
+    assert ttgir.count("ttmg.barrier_add_trans") == 1, ttgir
+    assert ttgir.count("ttmg.arrive_barrier_noret") == 1, ttgir
+    assert ttgir.count("ttmg.wait_barrier") == 1, ttgir
+    assert f"musa.max_bar_id = {stages}" in ttgir, ttgir
 
 @triton.jit
 def _two_readers(left, right, out, BLOCK: tl.constexpr, N: tl.constexpr):
@@ -5501,6 +5880,84 @@ def test_independent_loops_split_fields_same_partition_readers(stages):
         assert torch.equal(out, expected)
     assert "llvm.musa.barrier0" not in compiled.asm["llir"]
 
+def test_mthreads_fused_pipe_consumer_producer_lowers(stages):
+    ttir, ttgir, _ = _compile_pipeline(_fused_pipe_kernel, stages)
+
+    assert ttir.count("tle.pipe.reader_wait") == 4 * stages, ttir
+    assert ttir.count("tle.pipe.writer_acquire") == 2 * stages, ttir
+    assert "tle.pipe." not in ttgir, ttgir
+    constants = _i32_constants(ttgir)
+    arrivals = re.findall(
+        r"ttmg\.init_arrival\s+(%[-\w.]+),\s+(%[-\w.]+),\s+(%[-\w.]+)",
+        ttgir,
+    )
+    assert [constants[count] for _, count, _ in arrivals] == (
+        [1] * stages + [20] * stages
+    )
+
+
+@pytest.mark.parametrize("stages", [1, 2, 3])
+def test_mthreads_two_single_field_pipes_keep_independent_barrier_rings(stages):
+    ttgir = _compile_dual_pipeline(stages)
+    assert "tle.pipe." not in ttgir, ttgir
+    assert ttgir.count("ttmg.init_arrival") == 4 * stages, ttgir
+    assert ttgir.count("ttmg.barrier_add_trans") == 4 * stages, ttgir
+    assert ttgir.count("ttmg.async_tme_copy_global_to_local") == 4 * stages, ttgir
+    assert f"musa.max_bar_id = {4 * stages}" in ttgir, ttgir
+
+
+@pytest.mark.parametrize("stages", [1, 2, 3])
+def test_mthreads_multi_field_pipe_groups_completion_transaction(stages):
+    ttir, ttgir, _ = _compile_pipeline(_multi_field_kernel, stages)
+
+    assert ttir.count("tle.pipe.create") == 1, ttir
+    assert "tle.pipe." not in ttgir, ttgir
+    assert ttgir.count("ttmg.init_arrival") == 2 * stages, ttgir
+    assert ttgir.count("ttmg.async_tme_copy_global_to_local") == 4 * stages, ttgir
+    assert ttgir.count("ttmg.barrier_add_trans") == 2 * stages, ttgir
+    assert f"musa.max_bar_id = {2 * stages}" in ttgir, ttgir
+    assert all(
+        "%c512" in line
+        for line in ttgir.splitlines()
+        if "ttmg.barrier_add_trans" in line
+    )
+    # Aggregate transaction registration may precede the copies, but producer
+    # arrival must follow the final payload issue.
+    assert ttgir.rfind("ttmg.async_tme_copy_global_to_local") < ttgir.rfind(
+        "ttmg.arrive_barrier_noret"
+    ), ttgir
+
+
+@pytest.mark.parametrize("stages", [1, 2, 3])
+def test_mthreads_three_field_pipe_groups_completion_transaction(stages):
+    ttir, ttgir, _ = _compile_pipeline(_three_field_kernel, stages)
+
+    assert ttir.count("tle.pipe.create") == 1, ttir
+    assert "tle.pipe." not in ttgir, ttgir
+    assert ttgir.count("ttmg.init_arrival") == 2 * stages, ttgir
+    assert ttgir.count("ttmg.async_tme_copy_global_to_local") == 6 * stages, ttgir
+    assert ttgir.count("ttmg.barrier_add_trans") == 2 * stages, ttgir
+    assert f"musa.max_bar_id = {2 * stages}" in ttgir, ttgir
+    assert all(
+        "%c768" in line
+        for line in ttgir.splitlines()
+        if "ttmg.barrier_add_trans" in line
+    )
+    assert ttgir.rfind("ttmg.async_tme_copy_global_to_local") < ttgir.rfind(
+        "ttmg.arrive_barrier_noret"
+    ), ttgir
+
+
+@pytest.mark.parametrize(
+    "kernel,diagnostic",
+    [
+        (_too_many_fields_kernel, "supports at most three payload fields"),
+        (_named_reader_kernel, "supports only the default SPSC reader"),
+    ],
+)
+def test_mthreads_pipe_rejects_unsupported_frontend_options(kernel, diagnostic):
+    with pytest.raises(CompilationError, match=diagnostic):
+        _compile_invalid_pipeline(kernel)
 
 @triton.jit
 def _tme_writer(writer, src, BLOCK: tl.constexpr, N: tl.constexpr, CONDITIONAL: tl.constexpr):
@@ -5526,6 +5983,11 @@ def _mutating_reader(reader, dst, BLOCK: tl.constexpr, N: tl.constexpr):
         tle.gpu.copy(wait.slot.data, dst, (BLOCK, ), (j * BLOCK, ))
         reader.release(j)
 
+def test_mthreads_pipe_rejects_writer_in_default_partition(capfd):
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        _compile_invalid_pipeline(_misplaced_pipe_kernel)
+    assert "requires writer operations either outside warp_specialize or in the final worker partition" in capfd.readouterr(
+    ).err
 
 @triton.jit
 def _mutation_pipe(src, dst, STAGES: tl.constexpr, BLOCK: tl.constexpr, N: tl.constexpr, CONDITIONAL: tl.constexpr,
@@ -5547,6 +6009,34 @@ def _mutation_pipe(src, dst, STAGES: tl.constexpr, BLOCK: tl.constexpr, N: tl.co
             worker_num_regs=[24],
         )
 
+def test_mthreads_pipe_rejects_sibling_if_wait_release(capfd):
+    """Sibling branch edges stay fail-closed until phase analysis exists."""
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        _compile_invalid_pipeline(_sibling_if_pipe_kernel)
+    diagnostic = capfd.readouterr().err
+    assert "same-block or same-scoped-CFG, same-stage matching reader.wait" in diagnostic
+    assert "sibling scf.if paths require an explicit loop-carried phase protocol" in diagnostic
+
+
+@pytest.mark.parametrize(
+    "block_m,block_n,k_tiles,stages",
+    [
+        pytest.param(128, 128, 4, 1, id="m128-n128-k256-stage1"),
+        pytest.param(128, 128, 4, 2, id="m128-n128-k256-stage2"),
+        pytest.param(128, 128, 7, 3, id="m128-n128-k448-stage3"),
+        pytest.param(256, 256, 1, 1, id="m256-n256-k64-stage1"),
+    ],
+)
+def test_mthreads_non_ws_pipe_mm_runtime(block_m, block_n, k_tiles, stages):
+    torch.manual_seed(42)
+    block_k = 64
+    k = k_tiles * block_k
+    a = torch.randn((block_m, k), dtype=torch.float16, device="musa")
+    b = torch.randn((k, block_n), dtype=torch.float16, device="musa")
+    out = torch.empty((block_m, block_n), dtype=torch.float16, device="musa")
+    a_desc = TensorDescriptor.from_tensor(a, [block_m, block_k])
+    b_desc = TensorDescriptor.from_tensor(b, [block_k, block_n])
+    reference = torch.matmul(a.to(torch.float32), b.to(torch.float32))
 
 @pytest.mark.parametrize("stages", [1, 2, 3])
 @pytest.mark.parametrize("worker_reader", [False, True])
@@ -5610,6 +6100,20 @@ def _one_shot_mutable(dst, BLOCK: tl.constexpr, N: tl.constexpr):
         worker_num_warps=[4],
         worker_num_regs=[24],
     )
+    assert compiled.metadata.num_warps == 20
+    assert compiled.metadata.shared == stages * 65536
+    assert '"ttg.total-num-warps" = 20 : i32' in compiled.asm["ttgir"]
+    assert compiled.asm["ttgir"].count("ttg.warp_specialize") == 1
+    assert "musa_tle.static_ws." not in compiled.asm["ttgir"]
+    assert "ttg.warp_specialize" not in compiled.asm["llir"]
+    assert "ttg.convert_layout" not in compiled.asm["ttgir"]
+    assert "swizzleGranularity = 1 : i32" in compiled.asm["ttgir"]
+    assert "swizzleGranularity = 2 : i32" in compiled.asm["ttgir"]
+    assert "builtin.unrealized_conversion_cast" not in compiled.asm["llir"]
+    # One rendezvous initializes partition barriers before dispatch; the
+    # second keeps producer warps alive until consumer SQMMA/store retirement.
+    assert compiled.asm["llir"].count("call void @llvm.musa.syncthreads.lm()") == 2
+    assert f"llvm.musa.async.bar.record(i32 {4 * stages})" in compiled.asm["llir"]
 
 
 def test_one_shot_repeated_wait_mutable_payload_and_tme_store():
