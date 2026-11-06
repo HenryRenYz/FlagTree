@@ -926,3 +926,28 @@ def test_xgboost_progress_uses_flushed_text_without_tqdm(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "XGBoost progress: 1/4 trees" in output
     assert "XGBoost progress: 4/4 trees" in output
+
+
+@pytest.mark.parametrize("illegal", [False, True])
+def test_explicit_training_domain_is_indexed_once(tmp_path, monkeypatch, illegal):
+    variant = parse_operator_config(_config()).get_variant("kernel")
+    domain = list(variant.param_space.iter_configs())
+    variant.param_space.explicit_configs = domain[:-1] if illegal else domain
+    path = tmp_path / "data.jsonl"
+    _write_data(path)
+    calls = []
+    original = variant.param_space.config_key
+
+    def count_key(config):
+        calls.append(config)
+        return original(config)
+
+    monkeypatch.setattr(variant.param_space, "config_key", count_key)
+    options = XGBoostTrainingOptions(min_train_rows=2)
+    if illegal:
+        with pytest.raises(TrainingDataError, match="outside.*parameter space"):
+            prepare_ranking_data(variant, path, options)
+    else:
+        result = prepare_ranking_data(variant, path, options)
+        assert result.row_count == 8
+        assert len(calls) == len(domain) + result.row_count
