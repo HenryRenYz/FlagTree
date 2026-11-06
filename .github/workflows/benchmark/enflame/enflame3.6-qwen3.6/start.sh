@@ -57,7 +57,7 @@ export ENABLE_I64_CHECK=0
 export TORCHGCU_INDUCTOR_ENABLE=1
 
 nohup vllm serve ./Qwen3.6-27B/  \
-    --tensor-parallel-size 4 \
+    --tensor-parallel-size 2 \
     --port "${VLLM_QWEN3_PORT}" \
     --served-model-name qwen36 \
     --max-model-len 32768 \
@@ -65,7 +65,7 @@ nohup vllm serve ./Qwen3.6-27B/  \
     --enforce-eager \
     --limit-mm-per-prompt '{"image": 1}' \
     --gpu-memory-utilization 0.8 \
-    --dtype bfloat16 2>&1 >vllm.log &
+    --dtype bfloat16 >vllm.log 2>&1 &
 echo "$!" >pid.txt
 
 PID_FILE="pid.txt"
